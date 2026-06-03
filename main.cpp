@@ -9,6 +9,10 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_BUTTON(wxID_HIGHEST + 3, MainFrame::OnSave)
     EVT_TOGGLEBUTTON(wxID_HIGHEST + 5, MainFrame::OnThemeToggle)
     EVT_BUTTON(wxID_HIGHEST + 6, MainFrame::OnApplyFilter)
+    EVT_BUTTON(wxID_HIGHEST + 7, MainFrame::OnNewTab)
+    EVT_BUTTON(wxID_HIGHEST + 8, MainFrame::OnUploadFile)
+    EVT_BUTTON(wxID_HIGHEST + 9, MainFrame::OnCloseTab)
+    EVT_BUTTON(wxID_HIGHEST + 10, MainFrame::OnExecuteCommand)
     EVT_CLOSE(MainFrame::OnClose)
 wxEND_EVENT_TABLE()
 
@@ -235,18 +239,19 @@ MainFrame::MainFrame()
 
     LoadSettings();
 
-    m_reader =
-        std::make_unique<SSHJournalReader>();
 }
 
 MainFrame::~MainFrame()
 {
     SaveSettings();
 
-    if (m_reader)
+    for (auto& tab : m_tabs)
     {
-        m_reader->SetCallback(nullptr);
-        m_reader->Stop();
+        if (tab->reader)
+        {
+            tab->reader->SetCallback(nullptr);
+            tab->reader->Stop();
+        }
     }
 }
 
@@ -256,52 +261,6 @@ void MainFrame::CreateControls()
         new wxBoxSizer(wxVERTICAL);
 
     root->SetMinSize(wxSize(980, 620));
-
-    auto* connectionBox =
-        new wxStaticBoxSizer(wxVERTICAL, this, "Connection");
-
-    auto* conn =
-        new wxFlexGridSizer(2, 4, 8, 10);
-
-    conn->Add(new wxStaticText(this, wxID_ANY, "Host"), 0, wxALIGN_CENTER_VERTICAL);
-    conn->Add(new wxStaticText(this, wxID_ANY, "User"), 0, wxALIGN_CENTER_VERTICAL);
-    conn->Add(new wxStaticText(this, wxID_ANY, "Password"), 0, wxALIGN_CENTER_VERTICAL);
-    conn->Add(new wxStaticText(this, wxID_ANY, "Regex Filter"), 0, wxALIGN_CENTER_VERTICAL);
-
-    m_host =
-        new wxTextCtrl(this, wxID_ANY);
-
-    m_user =
-        new wxTextCtrl(this, wxID_ANY);
-
-    m_password =
-        new wxTextCtrl(
-            this,
-            wxID_ANY,
-            "",
-            wxDefaultPosition,
-            wxDefaultSize,
-            wxTE_PASSWORD);
-
-    m_filter =
-        new wxTextCtrl(this, wxID_HIGHEST + 4);
-
-    m_host->SetHint("server.example.com");
-    m_user->SetHint("root");
-    m_filter->SetHint("error|warning|sshd");
-
-    conn->Add(m_host,     1, wxEXPAND);
-    conn->Add(m_user,     1, wxEXPAND);
-    conn->Add(m_password, 1, wxEXPAND);
-    conn->Add(m_filter,   1, wxEXPAND);
-
-    conn->AddGrowableCol(0);
-    conn->AddGrowableCol(1);
-    conn->AddGrowableCol(2);
-    conn->AddGrowableCol(3);
-
-    connectionBox->Add(conn, 0, wxEXPAND | wxALL, 10);
-    root->Add(connectionBox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 10);
 
     auto* actionBox =
         new wxStaticBoxSizer(wxHORIZONTAL, this, "Actions");
@@ -321,19 +280,39 @@ void MainFrame::CreateControls()
     m_applyFilter =
         new wxButton(this, wxID_HIGHEST + 6, "Apply Filter");
 
+    m_newTab =
+        new wxButton(this, wxID_HIGHEST + 7, "New Tab");
+
+    m_closeTab =
+        new wxButton(this, wxID_HIGHEST + 9, "Close Tab");
+
+    m_uploadFile =
+        new wxButton(this, wxID_HIGHEST + 8, "Upload File");
+
+    m_executeCommand =
+        new wxButton(this, wxID_HIGHEST + 10, "Run Command");
+
     m_darkTheme =
         new wxToggleButton(this, wxID_HIGHEST + 5, "Dark Mode");
 
-    const wxSize buttonSize(128, 34);
+    const wxSize buttonSize(118, 34);
     m_connect->SetMinSize(buttonSize);
     m_disconnect->SetMinSize(buttonSize);
     m_save->SetMinSize(buttonSize);
     m_applyFilter->SetMinSize(buttonSize);
+    m_newTab->SetMinSize(buttonSize);
+    m_closeTab->SetMinSize(buttonSize);
+    m_uploadFile->SetMinSize(buttonSize);
+    m_executeCommand->SetMinSize(buttonSize);
     m_darkTheme->SetMinSize(buttonSize);
 
+    btns->Add(m_newTab,      0, wxRIGHT, 8);
+    btns->Add(m_closeTab,    0, wxRIGHT, 8);
     btns->Add(m_connect,     0, wxRIGHT, 8);
     btns->Add(m_disconnect,  0, wxRIGHT, 8);
     btns->Add(m_applyFilter, 0, wxRIGHT, 8);
+    btns->Add(m_executeCommand, 0, wxRIGHT, 8);
+    btns->Add(m_uploadFile,  0, wxRIGHT, 8);
     btns->Add(m_save,        0, wxRIGHT, 8);
     btns->AddStretchSpacer();
     btns->Add(m_darkTheme);
@@ -341,9 +320,103 @@ void MainFrame::CreateControls()
     actionBox->Add(btns, 1, wxEXPAND | wxALL, 10);
     root->Add(actionBox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 10);
 
-    m_logView =
+    m_notebook =
+        new wxNotebook(this, wxID_ANY);
+
+    root->Add(m_notebook, 1, wxEXPAND | wxALL, 10);
+
+    SetSizer(root);
+    CreateStatusBar();
+    SetStatusText("Ready");
+}
+
+ConnectionTab* MainFrame::CurrentTab()
+{
+    return TabAt(CurrentTabIndex());
+}
+
+ConnectionTab* MainFrame::TabAt(std::size_t index)
+{
+    if (index >= m_tabs.size())
+        return nullptr;
+
+    return m_tabs[index].get();
+}
+
+std::size_t MainFrame::CurrentTabIndex() const
+{
+    if (!m_notebook || m_notebook->GetPageCount() == 0)
+        return 0;
+
+    const int selection = m_notebook->GetSelection();
+    if (selection == wxNOT_FOUND)
+        return 0;
+
+    return static_cast<std::size_t>(selection);
+}
+
+ConnectionTab& MainFrame::AddConnectionTab(
+    const wxString& title,
+    bool select)
+{
+    auto tab =
+        std::make_unique<ConnectionTab>();
+
+    tab->page =
+        new wxPanel(m_notebook, wxID_ANY);
+
+    auto* root =
+        new wxBoxSizer(wxVERTICAL);
+
+    auto* connectionBox =
+        new wxStaticBoxSizer(wxVERTICAL, tab->page, "Connection");
+
+    auto* conn =
+        new wxFlexGridSizer(2, 4, 8, 10);
+
+    conn->Add(new wxStaticText(tab->page, wxID_ANY, "Host"), 0, wxALIGN_CENTER_VERTICAL);
+    conn->Add(new wxStaticText(tab->page, wxID_ANY, "User"), 0, wxALIGN_CENTER_VERTICAL);
+    conn->Add(new wxStaticText(tab->page, wxID_ANY, "Password"), 0, wxALIGN_CENTER_VERTICAL);
+    conn->Add(new wxStaticText(tab->page, wxID_ANY, "Regex Filter"), 0, wxALIGN_CENTER_VERTICAL);
+
+    tab->host =
+        new wxTextCtrl(tab->page, wxID_ANY);
+
+    tab->user =
+        new wxTextCtrl(tab->page, wxID_ANY);
+
+    tab->password =
         new wxTextCtrl(
-            this,
+            tab->page,
+            wxID_ANY,
+            "",
+            wxDefaultPosition,
+            wxDefaultSize,
+            wxTE_PASSWORD);
+
+    tab->filter =
+        new wxTextCtrl(tab->page, wxID_ANY);
+
+    tab->host->SetHint("server.example.com");
+    tab->user->SetHint("root");
+    tab->filter->SetHint("error|warning|sshd");
+
+    conn->Add(tab->host,     1, wxEXPAND);
+    conn->Add(tab->user,     1, wxEXPAND);
+    conn->Add(tab->password, 1, wxEXPAND);
+    conn->Add(tab->filter,   1, wxEXPAND);
+
+    conn->AddGrowableCol(0);
+    conn->AddGrowableCol(1);
+    conn->AddGrowableCol(2);
+    conn->AddGrowableCol(3);
+
+    connectionBox->Add(conn, 0, wxEXPAND | wxALL, 10);
+    root->Add(connectionBox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 10);
+
+    tab->logView =
+        new wxTextCtrl(
+            tab->page,
             wxID_ANY,
             "",
             wxDefaultPosition,
@@ -352,48 +425,152 @@ void MainFrame::CreateControls()
             wxTE_READONLY  |
             wxTE_RICH2);
 
-    m_logView->SetFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
+    tab->logView->SetFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
+    root->Add(tab->logView, 1, wxEXPAND | wxALL, 10);
 
-    root->Add(m_logView, 1, wxEXPAND | wxALL, 10);
+    tab->page->SetSizer(root);
+    tab->reader =
+        std::make_unique<SSHJournalReader>();
 
-    SetSizer(root);
-    CreateStatusBar();
-    SetStatusText("Ready");
+    auto& ref = *tab;
+    m_tabs.push_back(std::move(tab));
+    m_notebook->AddPage(ref.page, title, select);
+
+    return ref;
+}
+
+void MainFrame::UpdateTabTitle(std::size_t index)
+{
+    auto* tab = TabAt(index);
+    if (!tab || !m_notebook)
+        return;
+
+    wxString label = tab->host->GetValue();
+    if (label.empty())
+        label = wxString::Format("Connection %zu", index + 1);
+
+    m_notebook->SetPageText(index, label);
+}
+
+void MainFrame::CloseConnectionTab(std::size_t index)
+{
+    auto* tab = TabAt(index);
+    if (!tab)
+        return;
+
+    if (m_tabs.size() == 1)
+    {
+        SetStatusText("At least one connection tab must remain");
+        return;
+    }
+
+    if (tab->reader)
+    {
+        tab->reader->SetCallback(nullptr);
+        tab->reader->Stop();
+    }
+
+    m_notebook->DeletePage(index);
+    m_tabs.erase(m_tabs.begin() + static_cast<std::ptrdiff_t>(index));
+
+    const std::size_t nextIndex =
+        index >= m_tabs.size() ? m_tabs.size() - 1 : index;
+
+    if (!m_tabs.empty())
+        m_notebook->SetSelection(nextIndex);
+
+    SaveSettings();
+    SetStatusText("Connection tab closed");
 }
 
 void MainFrame::LoadSettings()
 {
     wxConfig config("RemoteJournal");
 
-    wxString host;
-    wxString user;
-    wxString filter;
+    long tabCount = 0;
+    config.Read("tabs/count", &tabCount, 0);
 
-    if (config.Read("connection/host", &host))
-        m_host->SetValue(host);
-
-    if (config.Read("connection/user", &user))
-        m_user->SetValue(user);
-
-    if (config.Read("filter/pattern", &filter))
+    if (tabCount <= 0)
     {
-        m_filter->SetValue(filter);
-        m_activeFilter = filter.ToStdString();
+        auto& tab = AddConnectionTab("Connection 1", true);
 
-        if (!m_activeFilter.empty())
+        wxString host;
+        wxString user;
+        wxString filter;
+
+        if (config.Read("connection/host", &host))
+            tab.host->SetValue(host);
+
+        if (config.Read("connection/user", &user))
+            tab.user->SetValue(user);
+
+        if (config.Read("filter/pattern", &filter))
+            tab.filter->SetValue(filter);
+
+        if (!filter.empty())
         {
+            tab.activeFilter = filter.ToStdString();
             try
             {
-                m_activeRegex = std::regex(m_activeFilter);
+                tab.activeRegex = std::regex(tab.activeFilter);
             }
             catch (const std::regex_error&)
             {
-                m_activeFilter.clear();
-                m_activeRegex.reset();
-                m_filter->Clear();
+                tab.activeFilter.clear();
+                tab.activeRegex.reset();
+                tab.filter->Clear();
             }
         }
+
+        UpdateTabTitle(0);
     }
+    else
+    {
+        for (long i = 0; i < tabCount; ++i)
+        {
+            auto& tab = AddConnectionTab(
+                wxString::Format("Connection %ld", i + 1),
+                i == 0);
+
+            const wxString base =
+                wxString::Format("tabs/%ld/", i);
+
+            wxString host;
+            wxString user;
+            wxString filter;
+
+            if (config.Read(base + "host", &host))
+                tab.host->SetValue(host);
+
+            if (config.Read(base + "user", &user))
+                tab.user->SetValue(user);
+
+            if (config.Read(base + "filter", &filter))
+                tab.filter->SetValue(filter);
+
+            if (!filter.empty())
+            {
+                tab.activeFilter = filter.ToStdString();
+                try
+                {
+                    tab.activeRegex = std::regex(tab.activeFilter);
+                }
+                catch (const std::regex_error&)
+                {
+                    tab.activeFilter.clear();
+                    tab.activeRegex.reset();
+                    tab.filter->Clear();
+                }
+            }
+
+            UpdateTabTitle(static_cast<std::size_t>(i));
+        }
+    }
+
+    long selectedTab = 0;
+    config.Read("tabs/selected", &selectedTab, 0);
+    if (selectedTab >= 0 && selectedTab < static_cast<long>(m_tabs.size()))
+        m_notebook->SetSelection(static_cast<std::size_t>(selectedTab));
 
     bool dark = false;
     config.Read("ui/darkTheme", &dark, false);
@@ -431,9 +608,21 @@ void MainFrame::SaveSettings()
 {
     wxConfig config("RemoteJournal");
 
-    config.Write("connection/host", m_host->GetValue());
-    config.Write("connection/user", m_user->GetValue());
-    config.Write("filter/pattern", m_filter->GetValue());
+    config.DeleteGroup("tabs");
+    config.Write("tabs/count", static_cast<long>(m_tabs.size()));
+    config.Write("tabs/selected", static_cast<long>(CurrentTabIndex()));
+
+    for (std::size_t i = 0; i < m_tabs.size(); ++i)
+    {
+        const auto& tab = *m_tabs[i];
+        const wxString base =
+            wxString::Format("tabs/%zu/", i);
+
+        config.Write(base + "host", tab.host->GetValue());
+        config.Write(base + "user", tab.user->GetValue());
+        config.Write(base + "filter", tab.filter->GetValue());
+    }
+
     config.Write("ui/darkTheme", m_darkEnabled);
     config.Write("window/maximized", IsMaximized());
 
@@ -453,99 +642,109 @@ void MainFrame::SaveSettings()
 
 // Called only from the main thread (via OnSSHLog).
 // Stores the line and conditionally shows it.
-void MainFrame::AppendLog(const std::string& line)
+void MainFrame::AppendLog(
+    std::size_t tabIndex,
+    const std::string& line)
 {
-    m_logs.push_back(line);
+    auto* tab = TabAt(tabIndex);
+    if (!tab)
+        return;
 
+    tab->logs.push_back(line);
     const bool show =
-        !m_activeRegex || std::regex_search(line, *m_activeRegex);
+        !tab->activeRegex || std::regex_search(line, *tab->activeRegex);
 
     if (show)
     {
-        m_logView->AppendText(
+        tab->logView->AppendText(
             wxString::FromUTF8(line) + "\n");
-        m_logView->ShowPosition(m_logView->GetLastPosition());
-        m_logView->Refresh();
+        tab->logView->ShowPosition(tab->logView->GetLastPosition());
+        tab->logView->Refresh();
     }
 }
 
 // Rebuilds the view from the stored log lines.
 // Called only from the main thread.
-void MainFrame::RefreshFilteredLogs()
+void MainFrame::RefreshFilteredLogs(ConnectionTab& tab)
 {
-    m_logView->Clear();
+    tab.logView->Clear();
 
     // Freeze the control to avoid painting one line at
     // a time when re-populating with many entries.
-    m_logView->Freeze();
+    tab.logView->Freeze();
 
-    for (const auto& line : m_logs)
+    for (const auto& line : tab.logs)
     {
-        if (!m_activeRegex || std::regex_search(line, *m_activeRegex))
-            m_logView->AppendText(
+        if (!tab.activeRegex || std::regex_search(line, *tab.activeRegex))
+            tab.logView->AppendText(
                 wxString::FromUTF8(line) + "\n");
     }
 
-    m_logView->ShowPosition(m_logView->GetLastPosition());
-    m_logView->Thaw();
+    tab.logView->ShowPosition(tab.logView->GetLastPosition());
+    tab.logView->Thaw();
 }
 
 void MainFrame::OnConnect(wxCommandEvent&)
 {
-    if (!m_reader)
+    auto* tab = CurrentTab();
+    if (!tab || !tab->reader)
         return;
 
     SetStatusText("Connecting...");
     SaveSettings();
+    const std::size_t tabIndex = CurrentTabIndex();
 
     // Set the callback BEFORE starting the reader so
     // that no lines are silently dropped between Start()
     // and the point where the callback would have been set.
-    m_reader->SetCallback(
-        [this](const std::string& line)
+    tab->reader->SetCallback(
+        [this, tabIndex](const std::string& line)
         {
             // This lambda runs on the background thread.
             // Never touch wxWidgets objects here — only
             // queue a thread-safe event to the main thread.
             auto* evt = new wxThreadEvent(EVT_SSH_LOG);
+            evt->SetInt(static_cast<int>(tabIndex));
             evt->SetString(wxString::FromUTF8(line));
             wxQueueEvent(this, evt);
         });
 
     bool ok =
-        m_reader->Connect(
-            m_host->GetValue().ToStdString(),
-            m_user->GetValue().ToStdString(),
-            m_password->GetValue().ToStdString());
+        tab->reader->Connect(
+            tab->host->GetValue().ToStdString(),
+            tab->user->GetValue().ToStdString(),
+            tab->password->GetValue().ToStdString());
 
     if (!ok)
     {
         // Clear the callback on failure so it does not
         // hold a dangling capture of `this`.
-        m_reader->SetCallback(nullptr);
+        tab->reader->SetCallback(nullptr);
         SetStatusText("Connection failed");
         wxMessageBox("SSH connection failed");
         return;
     }
 
-    if (!m_reader->Start())
+    if (!tab->reader->Start())
     {
-        m_reader->SetCallback(nullptr);
-        m_reader->Stop();
+        tab->reader->SetCallback(nullptr);
+        tab->reader->Stop();
         SetStatusText("Connected, but journalctl failed to start");
         wxMessageBox("Connected, but failed to start journalctl");
         return;
     }
 
+    UpdateTabTitle(tabIndex);
     SetStatusText("Connected and streaming journalctl");
 }
 
 void MainFrame::OnDisconnect(wxCommandEvent&)
 {
-    if (m_reader)
+    auto* tab = CurrentTab();
+    if (tab && tab->reader)
     {
-        m_reader->SetCallback(nullptr);
-        m_reader->Stop();
+        tab->reader->SetCallback(nullptr);
+        tab->reader->Stop();
     }
 
     SetStatusText("Disconnected");
@@ -553,6 +752,10 @@ void MainFrame::OnDisconnect(wxCommandEvent&)
 
 void MainFrame::OnSave(wxCommandEvent&)
 {
+    auto* tab = CurrentTab();
+    if (!tab)
+        return;
+
     wxFileDialog dlg(
         this,
         "Save Logs",
@@ -564,11 +767,11 @@ void MainFrame::OnSave(wxCommandEvent&)
     if (dlg.ShowModal() != wxID_OK)
         return;
 
-    // m_logs is only ever touched from the main thread
+    // Logs are only ever touched from the main thread
     // so no locking is required here.
     std::ofstream out(dlg.GetPath().ToStdString());
 
-    for (const auto& log : m_logs)
+    for (const auto& log : tab->logs)
         out << log << '\n';
 
     SetStatusText("Logs saved");
@@ -576,14 +779,18 @@ void MainFrame::OnSave(wxCommandEvent&)
 
 void MainFrame::OnApplyFilter(wxCommandEvent&)
 {
+    auto* tab = CurrentTab();
+    if (!tab)
+        return;
+
     const std::string filter =
-        m_filter->GetValue().ToStdString();
+        tab->filter->GetValue().ToStdString();
 
     if (filter.empty())
     {
-        m_activeFilter.clear();
-        m_activeRegex.reset();
-        RefreshFilteredLogs();
+        tab->activeFilter.clear();
+        tab->activeRegex.reset();
+        RefreshFilteredLogs(*tab);
         SaveSettings();
         SetStatusText("Filter cleared");
         return;
@@ -591,8 +798,8 @@ void MainFrame::OnApplyFilter(wxCommandEvent&)
 
     try
     {
-        m_activeRegex = std::regex(filter);
-        m_activeFilter = filter;
+        tab->activeRegex = std::regex(filter);
+        tab->activeFilter = filter;
     }
     catch (const std::regex_error& e)
     {
@@ -601,13 +808,378 @@ void MainFrame::OnApplyFilter(wxCommandEvent&)
             "Regex Error",
             wxOK | wxICON_ERROR,
             this);
-        m_filter->SetValue(wxString::FromUTF8(m_activeFilter));
+        tab->filter->SetValue(wxString::FromUTF8(tab->activeFilter));
         return;
     }
 
-    RefreshFilteredLogs();
+    RefreshFilteredLogs(*tab);
     SaveSettings();
     SetStatusText("Filter applied");
+}
+
+void MainFrame::OnNewTab(wxCommandEvent&)
+{
+    AddConnectionTab(
+        wxString::Format("Connection %zu", m_tabs.size() + 1),
+        true);
+    ApplyTheme();
+    SaveSettings();
+    SetStatusText("New connection tab created");
+}
+
+void MainFrame::OnCloseTab(wxCommandEvent&)
+{
+    CloseConnectionTab(CurrentTabIndex());
+}
+
+void MainFrame::OnUploadFile(wxCommandEvent&)
+{
+    auto* tab = CurrentTab();
+    if (!tab)
+        return;
+
+    wxFileDialog fileDlg(
+        this,
+        "Select File to Upload",
+        "",
+        "",
+        "*.*",
+        wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+
+    if (fileDlg.ShowModal() != wxID_OK)
+        return;
+
+    wxTextEntryDialog remoteDlg(
+        this,
+        "Remote directory to upload into",
+        "SCP Upload",
+        "/tmp");
+
+    if (remoteDlg.ShowModal() != wxID_OK)
+        return;
+
+    SetStatusText("Uploading file...");
+
+    if (UploadFileViaScp(*tab, fileDlg.GetPath(), remoteDlg.GetValue()))
+        SetStatusText("File uploaded");
+    else
+        SetStatusText("File upload failed");
+}
+
+void MainFrame::OnExecuteCommand(wxCommandEvent&)
+{
+    auto* tab = CurrentTab();
+    if (!tab)
+        return;
+
+    wxTextEntryDialog commandDlg(
+        this,
+        "Remote command to execute",
+        "Run Remote Command",
+        "uname -a");
+
+    if (commandDlg.ShowModal() != wxID_OK)
+        return;
+
+    const wxString command = commandDlg.GetValue();
+    if (command.empty())
+        return;
+
+    SetStatusText("Running remote command...");
+
+    std::string output;
+    if (!ExecuteRemoteCommand(*tab, command, output))
+    {
+        SetStatusText("Remote command failed");
+        return;
+    }
+
+    wxString title = command;
+    if (title.length() > 24)
+        title = title.Left(21) + "...";
+
+    auto& outputTab =
+        AddConnectionTab("Cmd: " + title, true);
+
+    outputTab.host->SetValue(tab->host->GetValue());
+    outputTab.user->SetValue(tab->user->GetValue());
+
+    const std::string header =
+        "$ " + command.ToStdString() + "\n\n";
+    outputTab.logs.push_back(header + output);
+    outputTab.logView->SetValue(wxString::FromUTF8(header + output));
+    outputTab.logView->ShowPosition(outputTab.logView->GetLastPosition());
+
+    ApplyTheme();
+    SaveSettings();
+    SetStatusText("Remote command output opened in a new tab");
+}
+
+bool MainFrame::UploadFileViaScp(
+    const ConnectionTab& tab,
+    const wxString& localPath,
+    const wxString& remoteDirectory)
+{
+    ssh_session session = ssh_new();
+    if (!session)
+    {
+        wxMessageBox("Could not create SSH session");
+        return false;
+    }
+
+    const std::string host =
+        tab.host->GetValue().ToStdString();
+    const std::string user =
+        tab.user->GetValue().ToStdString();
+    const std::string password =
+        tab.password->GetValue().ToStdString();
+    const std::string remoteDir =
+        remoteDirectory.ToStdString();
+
+    ssh_options_set(session, SSH_OPTIONS_HOST, host.c_str());
+    ssh_options_set(session, SSH_OPTIONS_USER, user.c_str());
+
+    if (ssh_connect(session) != SSH_OK)
+    {
+        wxMessageBox(
+            wxString::Format("SSH connection failed:\n%s", ssh_get_error(session)),
+            "SCP Upload",
+            wxOK | wxICON_ERROR,
+            this);
+        ssh_free(session);
+        return false;
+    }
+
+    if (ssh_userauth_password(session, nullptr, password.c_str()) != SSH_AUTH_SUCCESS)
+    {
+        wxMessageBox(
+            wxString::Format("SSH authentication failed:\n%s", ssh_get_error(session)),
+            "SCP Upload",
+            wxOK | wxICON_ERROR,
+            this);
+        ssh_disconnect(session);
+        ssh_free(session);
+        return false;
+    }
+
+    wxFileName fileName(localPath);
+    std::ifstream input(localPath.ToStdString(), std::ios::binary);
+    if (!input)
+    {
+        wxMessageBox("Could not open local file");
+        ssh_disconnect(session);
+        ssh_free(session);
+        return false;
+    }
+
+    input.seekg(0, std::ios::end);
+    const std::streamoff fileSize = input.tellg();
+    input.seekg(0, std::ios::beg);
+
+    if (fileSize < 0)
+    {
+        wxMessageBox("Could not determine local file size");
+        ssh_disconnect(session);
+        ssh_free(session);
+        return false;
+    }
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
+    ssh_scp scp =
+        ssh_scp_new(session, SSH_SCP_WRITE, remoteDir.c_str());
+
+    if (!scp)
+    {
+        wxMessageBox(
+            wxString::Format("Could not create SCP session:\n%s", ssh_get_error(session)),
+            "SCP Upload",
+            wxOK | wxICON_ERROR,
+            this);
+        ssh_disconnect(session);
+        ssh_free(session);
+        return false;
+    }
+
+    if (ssh_scp_init(scp) != SSH_OK)
+    {
+        wxMessageBox(
+            wxString::Format("Could not initialize SCP upload:\n%s", ssh_get_error(session)),
+            "SCP Upload",
+            wxOK | wxICON_ERROR,
+            this);
+        ssh_scp_free(scp);
+        ssh_disconnect(session);
+        ssh_free(session);
+        return false;
+    }
+
+    const std::string remoteName =
+        fileName.GetFullName().ToStdString();
+
+    if (ssh_scp_push_file64(
+            scp,
+            remoteName.c_str(),
+            static_cast<uint64_t>(fileSize),
+            0644) != SSH_OK)
+    {
+        wxMessageBox(
+            wxString::Format("Could not create remote file:\n%s", ssh_get_error(session)),
+            "SCP Upload",
+            wxOK | wxICON_ERROR,
+            this);
+        ssh_scp_close(scp);
+        ssh_scp_free(scp);
+        ssh_disconnect(session);
+        ssh_free(session);
+        return false;
+    }
+
+    std::array<char, 16384> buffer;
+    while (input)
+    {
+        input.read(buffer.data(), buffer.size());
+        const std::streamsize count = input.gcount();
+
+        if (count <= 0)
+            break;
+
+        if (ssh_scp_write(scp, buffer.data(), static_cast<std::size_t>(count)) != SSH_OK)
+        {
+            wxMessageBox(
+                wxString::Format("SCP write failed:\n%s", ssh_get_error(session)),
+                "SCP Upload",
+                wxOK | wxICON_ERROR,
+                this);
+            ssh_scp_close(scp);
+            ssh_scp_free(scp);
+            ssh_disconnect(session);
+            ssh_free(session);
+            return false;
+        }
+    }
+
+    ssh_scp_close(scp);
+    ssh_scp_free(scp);
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+    ssh_disconnect(session);
+    ssh_free(session);
+    return true;
+}
+
+bool MainFrame::ExecuteRemoteCommand(
+    const ConnectionTab& tab,
+    const wxString& command,
+    std::string& output)
+{
+    output.clear();
+
+    ssh_session session = ssh_new();
+    if (!session)
+    {
+        wxMessageBox("Could not create SSH session");
+        return false;
+    }
+
+    const std::string host =
+        tab.host->GetValue().ToStdString();
+    const std::string user =
+        tab.user->GetValue().ToStdString();
+    const std::string password =
+        tab.password->GetValue().ToStdString();
+    const std::string cmd =
+        command.ToStdString();
+
+    ssh_options_set(session, SSH_OPTIONS_HOST, host.c_str());
+    ssh_options_set(session, SSH_OPTIONS_USER, user.c_str());
+
+    if (ssh_connect(session) != SSH_OK)
+    {
+        wxMessageBox(
+            wxString::Format("SSH connection failed:\n%s", ssh_get_error(session)),
+            "Remote Command",
+            wxOK | wxICON_ERROR,
+            this);
+        ssh_free(session);
+        return false;
+    }
+
+    if (ssh_userauth_password(session, nullptr, password.c_str()) != SSH_AUTH_SUCCESS)
+    {
+        wxMessageBox(
+            wxString::Format("SSH authentication failed:\n%s", ssh_get_error(session)),
+            "Remote Command",
+            wxOK | wxICON_ERROR,
+            this);
+        ssh_disconnect(session);
+        ssh_free(session);
+        return false;
+    }
+
+    ssh_channel channel = ssh_channel_new(session);
+    if (!channel)
+    {
+        wxMessageBox("Could not create SSH channel");
+        ssh_disconnect(session);
+        ssh_free(session);
+        return false;
+    }
+
+    if (ssh_channel_open_session(channel) != SSH_OK ||
+        ssh_channel_request_exec(channel, cmd.c_str()) != SSH_OK)
+    {
+        wxMessageBox(
+            wxString::Format("Could not execute remote command:\n%s", ssh_get_error(session)),
+            "Remote Command",
+            wxOK | wxICON_ERROR,
+            this);
+        ssh_channel_free(channel);
+        ssh_disconnect(session);
+        ssh_free(session);
+        return false;
+    }
+
+    std::array<char, 8192> buffer;
+    while (!ssh_channel_is_eof(channel))
+    {
+        int n = ssh_channel_read_timeout(
+            channel,
+            buffer.data(),
+            buffer.size(),
+            /*is_stderr=*/0,
+            /*timeout_ms=*/200);
+
+        if (n > 0)
+            output.append(buffer.data(), static_cast<std::size_t>(n));
+        else if (n < 0)
+            break;
+
+        int err = ssh_channel_read_timeout(
+            channel,
+            buffer.data(),
+            buffer.size(),
+            /*is_stderr=*/1,
+            /*timeout_ms=*/0);
+
+        if (err > 0)
+            output.append(buffer.data(), static_cast<std::size_t>(err));
+        else if (err < 0)
+            break;
+    }
+
+    ssh_channel_send_eof(channel);
+    ssh_channel_close(channel);
+    ssh_channel_free(channel);
+    ssh_disconnect(session);
+    ssh_free(session);
+    return true;
 }
 
 void MainFrame::OnThemeToggle(wxCommandEvent&)
@@ -638,7 +1210,7 @@ void MainFrame::ApplyDarkTheme(wxWindow* w)
     const wxColour fieldBg(17, 19, 23);
     const wxColour accent(77, 144, 254);
 
-    if (w == m_connect || w == m_applyFilter)
+    if (w == m_connect || w == m_applyFilter || w == m_uploadFile)
     {
         w->SetBackgroundColour(accent);
         w->SetForegroundColour(*wxWHITE);
@@ -693,7 +1265,9 @@ void MainFrame::OnClose(wxCloseEvent& event)
 // Runs on the MAIN thread — safe to update the UI.
 void MainFrame::OnSSHLog(wxThreadEvent& event)
 {
-    AppendLog(event.GetString().ToStdString());
+    AppendLog(
+        static_cast<std::size_t>(event.GetInt()),
+        event.GetString().ToStdString());
 }
 
 //////////////////////////////////////////////////////////////////
