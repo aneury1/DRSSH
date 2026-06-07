@@ -11,10 +11,11 @@
 #include <wx/checkbox.h>
 #include <wx/splitter.h>
 #include <wx/datetime.h>
-#include <wx/stdpaths.h>
 #include <wx/menu.h>
 #include <wx/settings.h>
 #include <wx/clrpicker.h>
+#include <wx/notebook.h>
+#include <wx/scrolwin.h>
 
 #include "MainFrame.h"
 #include "Events.h"
@@ -22,7 +23,6 @@
 #include "Database.h"
 
 #include <fstream>
-#include <sstream>
 #include <regex>
 
 wxDialog* CreateProfileDialog(wxWindow* parent, ProfileManager& mgr);
@@ -30,6 +30,7 @@ wxDialog* CreateFilterConfigDialog(wxWindow* parent, FilterConfig& cfg);
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_CLOSE(MainFrame::OnClose)
+    EVT_NOTEBOOK_PAGE_CHANGED(wxID_ANY, MainFrame::OnNotebookPageChanged)
 wxEND_EVENT_TABLE()
 
 wxIMPLEMENT_APP(JournalApp);
@@ -37,26 +38,23 @@ wxIMPLEMENT_APP(JournalApp);
 // ─────────────────────────────────────────────
 MainFrame::MainFrame()
     : wxFrame(nullptr, wxID_ANY, "Remote Journalctl Viewer",
-              wxDefaultPosition, wxSize(1400, 860))
+              wxDefaultPosition, wxSize(1500, 900))
 {
-    SetMinSize(wxSize(900, 600));
+    SetMinSize(wxSize(1000, 600));
     BuildMenu();
     CreateControls();
-    Bind(EVT_SSH_LOG,    &MainFrame::OnSSHLog,   this);
-    Bind(EVT_SSH_STATUS, &MainFrame::OnSSHStatus, this);
+    Bind(EVT_SSH_LOG,    &MainFrame::OnSSHLog,    this);
+    Bind(EVT_SSH_STATUS, &MainFrame::OnSSHStatus,  this);
     CreateStatusBar(2);
     SetStatusText("Ready");
     LoadSettings();
+    LoadAutoStart();
 }
 
 MainFrame::~MainFrame()
 {
     for (auto& tab : m_tabs)
-        if (tab->reader)
-        {
-            tab->reader->SetCallback(nullptr);
-            tab->reader->Stop();
-        }
+        if (tab->reader) { tab->reader->SetCallback(nullptr); tab->reader->Stop(); }
 }
 
 // ─────────────────────────────────────────────
@@ -64,30 +62,28 @@ void MainFrame::BuildMenu()
 {
     m_menuBar = new wxMenuBar;
 
-    // File
     auto* file = new wxMenu;
     file->Append(ID_MENU_NEW_TAB,   "&New Tab\tCtrl+T");
     file->Append(ID_MENU_CLOSE_TAB, "&Close Tab\tCtrl+W");
     file->AppendSeparator();
     file->Append(ID_MENU_SAVE,      "&Save Logs (text)...\tCtrl+S");
-    file->Append(ID_MENU_SAVE_DB,   "Save Logs to &SQLite...");
+    file->Append(ID_MENU_SAVE_DB,   "Save / Export &SQLite...");
     file->Append(ID_MENU_OPEN_DB,   "&Open SQLite DB...\tCtrl+O");
     file->AppendSeparator();
     file->Append(wxID_EXIT, "E&xit\tAlt+F4");
     m_menuBar->Append(file, "&File");
 
-    // Connection
     auto* conn = new wxMenu;
     conn->Append(ID_MENU_CONNECT,         "&Connect\tCtrl+K");
     conn->Append(ID_MENU_DISCONNECT,      "&Disconnect\tCtrl+D");
     conn->AppendSeparator();
     conn->Append(ID_MENU_MANAGE_PROFILES, "&Manage Profiles...");
+    conn->Append(ID_MENU_AUTOSTART,       "&AutoStart Settings...");
     conn->AppendSeparator();
     m_profileMenu = new wxMenu;
     conn->AppendSubMenu(m_profileMenu, "Load &Profile");
     m_menuBar->Append(conn, "&Connection");
 
-    // Tools
     auto* tools = new wxMenu;
     tools->Append(ID_MENU_APPLY_FILTER,    "Apply &Filter\tCtrl+F");
     tools->Append(ID_MENU_CLEAR_FILTER,    "Clear Filter");
@@ -96,7 +92,6 @@ void MainFrame::BuildMenu()
     tools->Append(ID_MENU_EXECUTE_COMMAND, "Run &Command...\tCtrl+R");
     m_menuBar->Append(tools, "&Tools");
 
-    // Filters menu (new)
     auto* filters = new wxMenu;
     filters->Append(ID_MENU_FILTER_CONFIG,    "&Configure Filters...\tCtrl+Shift+F");
     filters->AppendSeparator();
@@ -104,33 +99,31 @@ void MainFrame::BuildMenu()
     filters->Append(ID_MENU_SAVE_FILTER_JSON, "&Save Filter JSON...");
     m_menuBar->Append(filters, "F&ilters");
 
-    // View
     auto* view = new wxMenu;
     view->AppendCheckItem(ID_MENU_DARK_THEME, "&Dark Theme\tCtrl+Shift+D");
     m_menuBar->Append(view, "&View");
 
     SetMenuBar(m_menuBar);
 
-    Bind(wxEVT_MENU, &MainFrame::OnMenuNewTab,         this, ID_MENU_NEW_TAB);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuCloseTab,       this, ID_MENU_CLOSE_TAB);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuSave,           this, ID_MENU_SAVE);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuSaveDb,         this, ID_MENU_SAVE_DB);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuOpenDb,         this, ID_MENU_OPEN_DB);
-    Bind(wxEVT_MENU, [this](wxCommandEvent&){ Close(); }, wxID_EXIT);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuConnect,        this, ID_MENU_CONNECT);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuDisconnect,     this, ID_MENU_DISCONNECT);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuManageProfiles, this, ID_MENU_MANAGE_PROFILES);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuApplyFilter,    this, ID_MENU_APPLY_FILTER);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuClearFilter,    this, ID_MENU_CLEAR_FILTER);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuUploadFile,     this, ID_MENU_UPLOAD_FILE);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuExecuteCommand, this, ID_MENU_EXECUTE_COMMAND);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuDarkTheme,      this, ID_MENU_DARK_THEME);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuFilterConfig,   this, ID_MENU_FILTER_CONFIG);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuLoadFilterJson, this, ID_MENU_LOAD_FILTER_JSON);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuSaveFilterJson, this, ID_MENU_SAVE_FILTER_JSON);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuNewTab,           this, ID_MENU_NEW_TAB);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuCloseTab,         this, ID_MENU_CLOSE_TAB);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuSave,             this, ID_MENU_SAVE);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuSaveDb,           this, ID_MENU_SAVE_DB);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuOpenDb,           this, ID_MENU_OPEN_DB);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&){ Close(); },       wxID_EXIT);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuConnect,          this, ID_MENU_CONNECT);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuDisconnect,       this, ID_MENU_DISCONNECT);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuManageProfiles,   this, ID_MENU_MANAGE_PROFILES);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuAutoStartSettings,this, ID_MENU_AUTOSTART);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuApplyFilter,      this, ID_MENU_APPLY_FILTER);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuClearFilter,      this, ID_MENU_CLEAR_FILTER);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuUploadFile,       this, ID_MENU_UPLOAD_FILE);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuExecuteCommand,   this, ID_MENU_EXECUTE_COMMAND);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuDarkTheme,        this, ID_MENU_DARK_THEME);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuFilterConfig,     this, ID_MENU_FILTER_CONFIG);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuLoadFilterJson,   this, ID_MENU_LOAD_FILTER_JSON);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuSaveFilterJson,   this, ID_MENU_SAVE_FILTER_JSON);
 }
-
-void MainFrame::BuildToolBar() {}
 
 void MainFrame::CreateControls()
 {
@@ -141,138 +134,170 @@ void MainFrame::CreateControls()
 }
 
 // ─────────────────────────────────────────────
+// Sidebar builder — left panel per tab
+// ─────────────────────────────────────────────
+wxPanel* MainFrame::BuildSidebar(wxWindow* parent, ConnectionTab& tab)
+{
+    // Scrollable sidebar so nothing gets cut off on small screens
+    auto* scroll = new wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition,
+                                        wxSize(280,-1), wxVSCROLL);
+    scroll->SetScrollRate(0, 8);
+
+    auto* root = new wxBoxSizer(wxVERTICAL);
+
+    // ── Connection box ───────────────────────────────────
+    auto* connBox = new wxStaticBoxSizer(wxVERTICAL, scroll, "Connection");
+    auto* grid = new wxFlexGridSizer(2, 4, 6);   // 2 cols
+    grid->AddGrowableCol(1);
+
+    auto addLbl = [&](const wxString& t){
+        grid->Add(new wxStaticText(scroll,wxID_ANY,t), 0, wxALIGN_CENTER_VERTICAL);
+    };
+    auto addFld = [&](const wxString& lbl, wxTextCtrl*& ctrl, long style=0){
+        addLbl(lbl);
+        ctrl = new wxTextCtrl(scroll,wxID_ANY,"",wxDefaultPosition,wxDefaultSize,style);
+        grid->Add(ctrl, 1, wxEXPAND);
+    };
+
+    addFld("Host:",     tab.host);      tab.host->SetHint("192.168.1.1");
+    addLbl("Port:");
+    tab.port = new wxSpinCtrl(scroll,wxID_ANY,"22",wxDefaultPosition,
+                               wxDefaultSize,wxSP_ARROW_KEYS,1,65535,22);
+    grid->Add(tab.port, 1, wxEXPAND);
+    addFld("User:",     tab.user);      tab.user->SetHint("root");
+    addFld("Password:", tab.password,   wxTE_PASSWORD);
+
+    connBox->Add(grid, 0, wxEXPAND | wxALL, 6);
+
+    // Connect / Disconnect buttons
+    auto* connBtns = new wxBoxSizer(wxHORIZONTAL);
+    auto* btnConn  = new wxButton(scroll,wxID_ANY,"Connect");
+    auto* btnDisco = new wxButton(scroll,wxID_ANY,"Disconnect");
+    connBtns->Add(btnConn,  1, wxEXPAND | wxRIGHT, 4);
+    connBtns->Add(btnDisco, 1, wxEXPAND);
+    connBox->Add(connBtns, 0, wxEXPAND | wxALL, 6);
+
+    addFld("jctl args:", tab.journalArgs); tab.journalArgs->SetHint("-f -o short-iso");
+    connBox->Add(grid, 0, wxEXPAND);  // journalArgs already added to grid
+
+    // SQLite
+    auto* sqlRow = new wxBoxSizer(wxHORIZONTAL);
+    tab.useSqlite = new wxCheckBox(scroll,wxID_ANY,"SQLite");
+    tab.dbPath    = new wxTextCtrl(scroll,wxID_ANY);
+    tab.dbPath->SetHint("auto: YYYYMMDD_host.db");
+    sqlRow->Add(tab.useSqlite, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT,4);
+    sqlRow->Add(tab.dbPath,    1, wxEXPAND);
+    connBox->Add(sqlRow, 0, wxEXPAND|wxALL, 6);
+
+    root->Add(connBox, 0, wxEXPAND|wxALL, 4);
+
+    // ── Filter box ──────────────────────────────────────
+    auto* filtBox = new wxStaticBoxSizer(wxVERTICAL, scroll, "Filters");
+
+    // Positive filter
+    filtBox->Add(new wxStaticText(scroll,wxID_ANY,"Show (regex):"), 0, wxBOTTOM, 2);
+    tab.filter = new wxTextCtrl(scroll,wxID_ANY);
+    tab.filter->SetHint("error|warn|sshd");
+    filtBox->Add(tab.filter, 0, wxEXPAND|wxBOTTOM, 6);
+
+    // Negative filter
+    filtBox->Add(new wxStaticText(scroll,wxID_ANY,"Hide (regex):"), 0, wxBOTTOM, 2);
+    tab.negFilter = new wxTextCtrl(scroll,wxID_ANY);
+    tab.negFilter->SetHint("DEBUG|audit|cron");
+    filtBox->Add(tab.negFilter, 0, wxEXPAND|wxBOTTOM, 6);
+
+    // Filter action buttons
+    auto* fltBtns = new wxBoxSizer(wxHORIZONTAL);
+    auto* btnApply    = new wxButton(scroll,wxID_ANY,"Apply",    wxDefaultPosition,wxSize(-1,28));
+    auto* btnClear    = new wxButton(scroll,wxID_ANY,"Clear",    wxDefaultPosition,wxSize(-1,28));
+    auto* btnSaveFilt = new wxButton(scroll,wxID_ANY,"Save Lines",wxDefaultPosition,wxSize(-1,28));
+    fltBtns->Add(btnApply,    1, wxEXPAND|wxRIGHT,3);
+    fltBtns->Add(btnClear,    1, wxEXPAND|wxRIGHT,3);
+    fltBtns->Add(btnSaveFilt, 1, wxEXPAND);
+    filtBox->Add(fltBtns, 0, wxEXPAND);
+
+    root->Add(filtBox, 0, wxEXPAND|wxALL, 4);
+
+    scroll->SetSizer(root);
+    root->FitInside(scroll);
+
+    // ── Button bindings ─────────────────────────────────
+    // We need to find the tab later by pointer so capture it
+    ConnectionTab* tabPtr = &tab;
+
+    btnConn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&){
+        auto* t=CurrentTab(); if(!t) return;
+        SetStatusText("Connecting..."); SaveSettings();
+        DoConnect(*t,CurrentTabIndex());
+    });
+    btnDisco->Bind(wxEVT_BUTTON, [this](wxCommandEvent&){
+        auto* t=CurrentTab(); if(t) DoDisconnect(*t);
+        SetStatusText("Disconnected");
+    });
+    btnApply->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e){ OnMenuApplyFilter(e); });
+    btnClear->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e){ OnMenuClearFilter(e); });
+
+    btnSaveFilt->Bind(wxEVT_BUTTON, [this, tabPtr](wxCommandEvent&){
+        // Make sure this tab is still alive
+        bool found = false;
+        for (auto& t : m_tabs) if (t.get()==tabPtr) { found=true; break; }
+        if (!found) return;
+
+        const auto& vis = tabPtr->logTable->VisibleEntries();
+        if (vis.empty()) { SetStatusText("No filtered lines to save"); return; }
+
+        wxDateTime now=wxDateTime::Now();
+        wxString host=tabPtr->host->GetValue(); host.Replace(".","-");
+        wxString def=now.Format("%Y%m%d_%H%M%S_")+host+"_filtered.txt";
+        wxFileDialog dlg(this,"Save Filtered Lines","",def,
+                         "Text files (*.txt)|*.txt|All (*)|*",
+                         wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
+        if (dlg.ShowModal()!=wxID_OK) return;
+        std::ofstream out(dlg.GetPath().ToStdString());
+        for (const auto& e : vis) out << e.raw << '\n';
+        SetStatusText(wxString::Format("Saved %zu lines", vis.size()));
+    });
+
+    return scroll;
+}
+
+// ─────────────────────────────────────────────
 ConnectionTab& MainFrame::AddConnectionTab(const wxString& title, bool select)
 {
     auto tab = std::make_unique<ConnectionTab>();
     tab->page = new wxPanel(m_notebook, wxID_ANY);
-    auto* root = new wxBoxSizer(wxVERTICAL);
 
-    // 2-col grid: label | control-row
-    auto* connBox = new wxStaticBoxSizer(wxVERTICAL, tab->page, "Connection");
-    auto* grid    = new wxFlexGridSizer(2, 6, 8);   // 2 cols, vgap=6, hgap=8
-    grid->AddGrowableCol(1);
+    // Outer horizontal splitter: left sidebar | right log area
+    auto* hSplit = new wxSplitterWindow(tab->page, wxID_ANY,
+                                         wxDefaultPosition, wxDefaultSize,
+                                         wxSP_LIVE_UPDATE|wxSP_THIN_SASH);
 
-    auto addLabel = [&](const wxString& lbl) {
-        grid->Add(new wxStaticText(tab->page,wxID_ANY,lbl), 0, wxALIGN_CENTER_VERTICAL);
-    };
-    auto addField = [&](const wxString& lbl, wxTextCtrl*& ctrl, long style=0) {
-        addLabel(lbl);
-        ctrl = new wxTextCtrl(tab->page, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, style);
-        grid->Add(ctrl, 1, wxEXPAND);
-    };
+    // Build sidebar (left)
+    wxPanel* sidebar = BuildSidebar(hSplit, *tab);
 
-    // Row 1: Host + Port + Connect/Disconnect
-    addLabel("Host:");
-    {
-        auto* hostRow = new wxBoxSizer(wxHORIZONTAL);
-        tab->host = new wxTextCtrl(tab->page, wxID_ANY);
-        tab->host->SetHint("192.168.1.1");
-        tab->port = new wxSpinCtrl(tab->page, wxID_ANY, "22",
-                                    wxDefaultPosition, wxSize(70,-1),
-                                    wxSP_ARROW_KEYS, 1, 65535, 22);
-        auto* btnConn  = new wxButton(tab->page, wxID_ANY, "Connect",
-                                      wxDefaultPosition, wxSize(90,-1));
-        auto* btnDisco = new wxButton(tab->page, wxID_ANY, "Disconnect",
-                                      wxDefaultPosition, wxSize(90,-1));
-        hostRow->Add(tab->host,  1, wxEXPAND | wxRIGHT, 6);
-        hostRow->Add(new wxStaticText(tab->page,wxID_ANY,"Port:"),
-                     0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-        hostRow->Add(tab->port,  0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
-        hostRow->Add(btnConn,    0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-        hostRow->Add(btnDisco,   0, wxALIGN_CENTER_VERTICAL);
-        grid->Add(hostRow, 1, wxEXPAND);
+    // Right area: vertical splitter: log table | payload
+    auto* vSplit = new wxSplitterWindow(hSplit, wxID_ANY,
+                                         wxDefaultPosition, wxDefaultSize,
+                                         wxSP_LIVE_UPDATE|wxSP_THIN_SASH);
 
-        btnConn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-            auto* t = CurrentTab(); if (!t) return;
-            SetStatusText("Connecting...");
-            SaveSettings();
-            DoConnect(*t, CurrentTabIndex());
-        });
-        btnDisco->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-            auto* t = CurrentTab(); if (t) DoDisconnect(*t);
-            SetStatusText("Disconnected");
-        });
-    }
-
-    // Row 2: User
-    addField("User:", tab->user); tab->user->SetHint("root");
-
-    // Row 3: Password
-    addField("Password:", tab->password, wxTE_PASSWORD);
-
-    // Row 4: Filter + Apply / Clear / Save Lines
-    addLabel("Filter:");
-    {
-        auto* filterRow = new wxBoxSizer(wxHORIZONTAL);
-        tab->filter = new wxTextCtrl(tab->page, wxID_ANY);
-        tab->filter->SetHint("regex: error|warn|sshd");
-        auto* btnApply = new wxButton(tab->page, wxID_ANY, "Apply",
-                                      wxDefaultPosition, wxSize(70,-1));
-        auto* btnClear = new wxButton(tab->page, wxID_ANY, "Clear",
-                                      wxDefaultPosition, wxSize(60,-1));
-        auto* btnSaveF = new wxButton(tab->page, wxID_ANY, "Save Lines",
-                                      wxDefaultPosition, wxSize(90,-1));
-        filterRow->Add(tab->filter, 1, wxEXPAND | wxRIGHT, 6);
-        filterRow->Add(btnApply,    0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-        filterRow->Add(btnClear,    0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
-        filterRow->Add(btnSaveF,    0, wxALIGN_CENTER_VERTICAL);
-        grid->Add(filterRow, 1, wxEXPAND);
-
-        btnApply->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e){ OnMenuApplyFilter(e); });
-        btnClear->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e){ OnMenuClearFilter(e); });
-        btnSaveF->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-            auto* t = CurrentTab(); if (!t) return;
-            const auto& vis = t->logTable->VisibleEntries();
-            if (vis.empty()) { SetStatusText("No filtered lines to save"); return; }
-            wxDateTime now = wxDateTime::Now();
-            wxString host = t->host->GetValue(); host.Replace(".", "_");
-            wxString def = now.Format("%Y%m%d_%H%M%S_") + host + "_filtered.txt";
-            wxFileDialog dlg(this,"Save Filtered Lines","",def,
-                             "Text files (*.txt)|*.txt|All (*)|*",
-                             wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
-            if (dlg.ShowModal()!=wxID_OK) return;
-            std::ofstream out(dlg.GetPath().ToStdString());
-            for (const auto& e : vis) out << e.raw << '\n';
-            SetStatusText(wxString::Format("Saved %zu filtered lines", vis.size()));
-        });
-    }
-
-    // Row 5: jctl args
-    addField("jctl args:", tab->journalArgs);
-    tab->journalArgs->SetHint("-f -o short-iso");
-
-    // Row 6: SQLite
-    addLabel("SQLite:");
-    {
-        auto* sqlRow = new wxBoxSizer(wxHORIZONTAL);
-        tab->useSqlite = new wxCheckBox(tab->page, wxID_ANY, "Enable");
-        tab->dbPath    = new wxTextCtrl(tab->page, wxID_ANY);
-        tab->dbPath->SetHint("auto: YYYYMMDD_host.db");
-        sqlRow->Add(tab->useSqlite, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
-        sqlRow->Add(tab->dbPath,    1, wxEXPAND);
-        grid->Add(sqlRow, 1, wxEXPAND);
-    }
-
-    connBox->Add(grid, 0, wxEXPAND | wxALL, 8);
-    root->Add(connBox, 0, wxEXPAND | wxALL, 4);
-
-    // Splitter: table | payload
-    auto* splitter = new wxSplitterWindow(tab->page, wxID_ANY,
-                                          wxDefaultPosition, wxDefaultSize,
-                                          wxSP_LIVE_UPDATE | wxSP_3D);
-    tab->logTable    = new LogTableCtrl(splitter);
-    tab->payloadCtrl = new wxTextCtrl(splitter, wxID_ANY, "",
+    tab->logTable    = new LogTableCtrl(vSplit);
+    tab->payloadCtrl = new wxTextCtrl(vSplit, wxID_ANY, "",
                                        wxDefaultPosition, wxDefaultSize,
                                        wxTE_MULTILINE|wxTE_READONLY|wxTE_RICH2);
     tab->payloadCtrl->SetFont(wxFontInfo(9).Family(wxFONTFAMILY_TELETYPE));
     tab->logTable->SetPayloadCtrl(tab->payloadCtrl);
     tab->logTable->SetFilterConfig(&m_filterConfig);
 
-    splitter->SplitHorizontally(tab->logTable, tab->payloadCtrl, -180);
-    splitter->SetMinimumPaneSize(60);
-    root->Add(splitter, 1, wxEXPAND | wxALL, 4);
+    vSplit->SplitHorizontally(tab->logTable, tab->payloadCtrl, -180);
+    vSplit->SetMinimumPaneSize(60);
 
+    hSplit->SplitVertically(sidebar, vSplit, 280);
+    hSplit->SetMinimumPaneSize(200);
+
+    auto* root = new wxBoxSizer(wxVERTICAL);
+    root->Add(hSplit, 1, wxEXPAND);
     tab->page->SetSizer(root);
+
     tab->reader = std::make_unique<SSHJournalReader>();
 
     auto& ref = *tab;
@@ -283,68 +308,50 @@ ConnectionTab& MainFrame::AddConnectionTab(const wxString& title, bool select)
 
 void MainFrame::UpdateTabTitle(std::size_t index)
 {
-    auto* t = TabAt(index);
-    if (!t) return;
-    wxString label = t->host->GetValue();
-    if (label.IsEmpty()) label = wxString::Format("Tab %zu", index+1);
-    m_notebook->SetPageText((int)index, label);
+    auto* t=TabAt(index); if(!t) return;
+    wxString label=t->host->GetValue();
+    if (label.IsEmpty()) label=wxString::Format("Tab %zu",index+1);
+    m_notebook->SetPageText((int)index,label);
 }
 
 void MainFrame::CloseConnectionTab(std::size_t index)
 {
-    if (m_tabs.size()==1) { SetStatusText("Cannot close the last tab"); return; }
-    auto* t = TabAt(index);
-    if (!t) return;
-    if (t->reader) { t->reader->SetCallback(nullptr); t->reader->Stop(); }
-    if (t->db)     { t->db->Close(); }
+    if (m_tabs.size()==1){SetStatusText("Cannot close the last tab");return;}
+    auto* t=TabAt(index); if(!t) return;
+    if (t->reader){t->reader->SetCallback(nullptr);t->reader->Stop();}
+    if (t->db) t->db->Close();
     m_notebook->DeletePage((int)index);
     m_tabs.erase(m_tabs.begin()+(std::ptrdiff_t)index);
-    std::size_t next = (index>=m_tabs.size()) ? m_tabs.size()-1 : index;
+    std::size_t next=(index>=m_tabs.size())?m_tabs.size()-1:index;
     if (!m_tabs.empty()) m_notebook->SetSelection((int)next);
     SaveSettings();
 }
 
-ConnectionTab* MainFrame::CurrentTab()  { return TabAt(CurrentTabIndex()); }
+ConnectionTab* MainFrame::CurrentTab() { return TabAt(CurrentTabIndex()); }
 ConnectionTab* MainFrame::TabAt(std::size_t i)
 {
-    return (i<m_tabs.size()) ? m_tabs[i].get() : nullptr;
+    return (i<m_tabs.size())?m_tabs[i].get():nullptr;
 }
 std::size_t MainFrame::CurrentTabIndex() const
 {
-    if (!m_notebook || m_notebook->GetPageCount()==0) return 0;
-    int s = m_notebook->GetSelection();
-    return (s==wxNOT_FOUND) ? 0 : (std::size_t)s;
+    if (!m_notebook||m_notebook->GetPageCount()==0) return 0;
+    int s=m_notebook->GetSelection();
+    return (s==wxNOT_FOUND)?0:(std::size_t)s;
 }
 
 // ─────────────────────────────────────────────
 void MainFrame::AppendLog(std::size_t tabIndex, const std::string& line)
 {
-    auto* tab = TabAt(tabIndex);
-    if (!tab) return;
-
-    // SQLite insert – only when db is open and session is set
-    if (tab->db && tab->db->IsOpen() && !tab->sessionId.empty())
-        tab->db->InsertLog(tab->sessionId, LogEntry::Parse(line));
-
+    auto* tab=TabAt(tabIndex); if(!tab) return;
+    if (tab->db&&tab->db->IsOpen()&&!tab->sessionId.empty())
+        tab->db->InsertLog(tab->sessionId,LogEntry::Parse(line));
     tab->logTable->AppendLine(line);
-}
-
-void MainFrame::RefreshFilteredLogs(ConnectionTab& tab)
-{
-    auto all = tab.logTable->AllEntries();
-    tab.logTable->SetEntries(all);
-    if (!tab.activeFilter.empty())
-        tab.logTable->ApplyFilter(tab.activeFilter);
 }
 
 void MainFrame::ApplyFilterConfigToAllTabs()
 {
-    for (auto& t : m_tabs)
-        if (t->logTable)
-        {
-            t->logTable->SetFilterConfig(&m_filterConfig);
-            t->logTable->Refresh();
-        }
+    for (auto& t:m_tabs)
+        if (t->logTable){t->logTable->SetFilterConfig(&m_filterConfig);t->logTable->Refresh();}
 }
 
 // ─────────────────────────────────────────────
@@ -352,20 +359,88 @@ void MainFrame::RebuildProfileMenu()
 {
     while (m_profileMenu->GetMenuItemCount()>0)
         m_profileMenu->Destroy(m_profileMenu->FindItemByPosition(0));
-
-    const auto& profs = m_profiles.Profiles();
-    if (profs.empty())
+    const auto& profs=m_profiles.Profiles();
+    if (profs.empty()){m_profileMenu->Append(ID_MENU_LOAD_PROFILE_BASE,"(no profiles)");return;}
+    for (std::size_t i=0;i<profs.size()&&i<50;++i)
     {
-        m_profileMenu->Append(ID_MENU_LOAD_PROFILE_BASE, "(no profiles)");
+        int id=ID_MENU_LOAD_PROFILE_BASE+(int)i;
+        m_profileMenu->Append(id,wxString::FromUTF8(profs[i].name.empty()?profs[i].host:profs[i].name));
+        Bind(wxEVT_MENU,&MainFrame::OnMenuLoadProfile,this,id);
+    }
+}
+
+// ─────────────────────────────────────────────
+void MainFrame::LoadAutoStart()
+{
+    if (!wxFileExists("autostart.json")) return;
+
+    // Ask for encryption key if file exists
+    wxPasswordEntryDialog dlg(this,
+        "autostart.json found.\nEnter encryption key to unlock sessions\n(leave blank for default key):",
+        "Unlock AutoStart");
+    std::string key = m_autoStartKey;
+    if (dlg.ShowModal()==wxID_OK && !dlg.GetValue().IsEmpty())
+        key = dlg.GetValue().ToStdString();
+
+    if (!m_autoStart.Load("autostart.json", key))
+    {
+        SetStatusText("Could not load autostart.json");
         return;
     }
-    for (std::size_t i=0; i<profs.size() && i<50; ++i)
+
+    // Apply sessions: each becomes a tab; auto-connect if flagged
+    for (std::size_t i=0; i<m_autoStart.Sessions().size(); ++i)
     {
-        int id = ID_MENU_LOAD_PROFILE_BASE+(int)i;
-        wxString label = wxString::FromUTF8(profs[i].name.empty()?profs[i].host:profs[i].name);
-        m_profileMenu->Append(id, label);
-        Bind(wxEVT_MENU, &MainFrame::OnMenuLoadProfile, this, id);
+        const auto& s = m_autoStart.Sessions()[i];
+        wxString title = wxString::FromUTF8(
+            s.profileName.empty() ? s.host : s.profileName);
+
+        // Add tab if we need more than we already have
+        while (m_tabs.size() <= i)
+            AddConnectionTab(wxString::Format("Connection %zu", m_tabs.size()+1), false);
+
+        auto* tab = TabAt(i);
+        if (!tab) continue;
+
+        tab->host->SetValue(wxString::FromUTF8(s.host));
+        tab->port->SetValue(s.port);
+        tab->user->SetValue(wxString::FromUTF8(s.user));
+        tab->password->SetValue(wxString::FromUTF8(s.encryptedPass)); // already decrypted
+        tab->journalArgs->SetValue(wxString::FromUTF8(s.journalArgs));
+        tab->filter->SetValue(wxString::FromUTF8(s.filter));
+        tab->negFilter->SetValue(wxString::FromUTF8(s.negFilter));
+        tab->useSqlite->SetValue(s.useSqlite);
+        tab->dbPath->SetValue(wxString::FromUTF8(s.dbPath));
+        UpdateTabTitle(i);
+
+        if (s.autoConnect)
+            DoConnect(*tab, i);
     }
+    if (!m_tabs.empty()) m_notebook->SetSelection(0);
+    SetStatusText("AutoStart loaded");
+}
+
+void MainFrame::SaveAutoStart()
+{
+    m_autoStart.Sessions().clear();
+    for (const auto& t : m_tabs)
+    {
+        AutoStartSession s;
+        s.profileName   = m_notebook->GetPageText(
+                              (int)(&t - &m_tabs[0])).ToStdString();
+        s.host          = t->host->GetValue().ToStdString();
+        s.port          = t->port->GetValue();
+        s.user          = t->user->GetValue().ToStdString();
+        s.encryptedPass = t->password->GetValue().ToStdString(); // Save will encrypt
+        s.journalArgs   = t->journalArgs->GetValue().ToStdString();
+        s.filter        = t->filter->GetValue().ToStdString();
+        s.negFilter     = t->negFilter->GetValue().ToStdString();
+        s.useSqlite     = t->useSqlite->GetValue();
+        s.dbPath        = t->dbPath->GetValue().ToStdString();
+        s.autoConnect   = t->reader && t->reader->IsRunning();
+        m_autoStart.Sessions().push_back(std::move(s));
+    }
+    m_autoStart.Save("autostart.json", m_autoStartKey);
 }
 
 // ─────────────────────────────────────────────
@@ -373,53 +448,47 @@ void MainFrame::LoadSettings()
 {
     m_profiles.Load();
     RebuildProfileMenu();
-
-    // Try loading default filter JSON
     m_filterConfig.LoadFromFile("filters.json");
 
     wxConfig cfg("RemoteJournal");
-    long count=0;
-    cfg.Read("tabs/count",&count,0);
+    long count=0; cfg.Read("tabs/count",&count,0);
 
     if (count<=0)
     {
-        AddConnectionTab("Connection 1", true);
+        AddConnectionTab("Connection 1",true);
     }
     else
     {
-        for (long i=0; i<count; ++i)
+        for (long i=0;i<count;++i)
         {
-            auto& tab = AddConnectionTab(wxString::Format("Connection %ld",i+1), i==0);
-            wxString base = wxString::Format("tabs/%ld/",i);
-            wxString tmp; long port=22;
+            auto& tab=AddConnectionTab(wxString::Format("Connection %ld",i+1),i==0);
+            wxString base=wxString::Format("tabs/%ld/",i);
+            wxString tmp; long port=22; bool useSql=false;
             cfg.Read(base+"host",&tmp,"");        tab.host->SetValue(tmp);
             cfg.Read(base+"port",&port,22);       tab.port->SetValue((int)port);
             cfg.Read(base+"user",&tmp,"");        tab.user->SetValue(tmp);
             cfg.Read(base+"filter",&tmp,"");      tab.filter->SetValue(tmp);
+            cfg.Read(base+"negFilter",&tmp,"");   tab.negFilter->SetValue(tmp);
             cfg.Read(base+"journalArgs",&tmp,""); tab.journalArgs->SetValue(tmp);
-            bool useSql=false;
             cfg.Read(base+"useSqlite",&useSql,false); tab.useSqlite->SetValue(useSql);
             cfg.Read(base+"dbPath",&tmp,"");      tab.dbPath->SetValue(tmp);
             UpdateTabTitle((std::size_t)i);
         }
     }
 
-    long sel=0;
-    cfg.Read("tabs/selected",&sel,0);
-    if (sel>=0 && sel<(long)m_tabs.size()) m_notebook->SetSelection((int)sel);
+    long sel=0; cfg.Read("tabs/selected",&sel,0);
+    if (sel>=0&&sel<(long)m_tabs.size()) m_notebook->SetSelection((int)sel);
 
-    bool dark=false;
-    cfg.Read("ui/dark",&dark,false);
+    bool dark=false; cfg.Read("ui/dark",&dark,false);
     m_darkEnabled=dark;
-    if (auto* mi = m_menuBar->FindItem(ID_MENU_DARK_THEME)) mi->Check(m_darkEnabled);
+    if (auto* mi=m_menuBar->FindItem(ID_MENU_DARK_THEME)) mi->Check(m_darkEnabled);
     ApplyTheme();
 
-    bool max=false;
-    cfg.Read("window/maximized",&max,false);
-    long x=50,y=50,w=1400,h=860;
-    bool hasGeo = cfg.Read("window/x",&x) && cfg.Read("window/y",&y) &&
-                  cfg.Read("window/w",&w) && cfg.Read("window/h",&h);
-    if (hasGeo) SetSize((int)x,(int)y,(int)w,(int)h);
+    bool max=false; cfg.Read("window/maximized",&max,false);
+    long x=50,y=50,w=1500,h=900;
+    if (cfg.Read("window/x",&x)&&cfg.Read("window/y",&y)&&
+        cfg.Read("window/w",&w)&&cfg.Read("window/h",&h))
+        SetSize((int)x,(int)y,(int)w,(int)h);
     if (max) Maximize();
 }
 
@@ -429,27 +498,25 @@ void MainFrame::SaveSettings()
     cfg.DeleteGroup("tabs");
     cfg.Write("tabs/count",(long)m_tabs.size());
     cfg.Write("tabs/selected",(long)CurrentTabIndex());
-
-    for (std::size_t i=0; i<m_tabs.size(); ++i)
+    for (std::size_t i=0;i<m_tabs.size();++i)
     {
-        const auto& t = *m_tabs[i];
-        wxString base = wxString::Format("tabs/%zu/",i);
+        const auto& t=*m_tabs[i];
+        wxString base=wxString::Format("tabs/%zu/",i);
         cfg.Write(base+"host",        t.host->GetValue());
         cfg.Write(base+"port",        (long)t.port->GetValue());
         cfg.Write(base+"user",        t.user->GetValue());
         cfg.Write(base+"filter",      t.filter->GetValue());
+        cfg.Write(base+"negFilter",   t.negFilter->GetValue());
         cfg.Write(base+"journalArgs", t.journalArgs->GetValue());
         cfg.Write(base+"useSqlite",   t.useSqlite->GetValue());
         cfg.Write(base+"dbPath",      t.dbPath->GetValue());
     }
-
-    cfg.Write("ui/dark", m_darkEnabled);
-    cfg.Write("window/maximized", IsMaximized());
-    if (!IsMaximized())
-    {
-        wxPoint p=GetPosition(); wxSize s=GetSize();
-        cfg.Write("window/x",(long)p.x); cfg.Write("window/y",(long)p.y);
-        cfg.Write("window/w",(long)s.x); cfg.Write("window/h",(long)s.y);
+    cfg.Write("ui/dark",m_darkEnabled);
+    cfg.Write("window/maximized",IsMaximized());
+    if (!IsMaximized()){
+        wxPoint p=GetPosition();wxSize s=GetSize();
+        cfg.Write("window/x",(long)p.x);cfg.Write("window/y",(long)p.y);
+        cfg.Write("window/w",(long)s.x);cfg.Write("window/h",(long)s.y);
     }
     cfg.Flush();
 }
@@ -459,149 +526,100 @@ bool MainFrame::DoConnect(ConnectionTab& tab, std::size_t tabIndex)
 {
     if (tab.reader->IsRunning()) DoDisconnect(tab);
 
-    // ── Open SQLite if requested ──
     if (tab.useSqlite->GetValue())
     {
-        // Close any old db first
         if (tab.db) tab.db->Close();
-
-        wxString path = tab.dbPath->GetValue().Trim();
+        wxString path=tab.dbPath->GetValue().Trim();
         if (path.IsEmpty())
         {
-            wxDateTime now = wxDateTime::Now();
-            wxString host  = tab.host->GetValue();
-            host.Replace(".", "_");
-            path = now.Format("%Y%m%d_%H%M%S_") + host + ".db";
-            tab.dbPath->SetValue(path);  // show the auto-generated name
+            wxDateTime now=wxDateTime::Now();
+            wxString host=tab.host->GetValue(); host.Replace(".","_");
+            path=now.Format("%Y%m%d_%H%M%S_")+host+".db";
+            tab.dbPath->SetValue(path);
         }
-
-        tab.db = std::make_unique<Database>();
+        tab.db=std::make_unique<Database>();
         if (!tab.db->Open(path.ToStdString()))
         {
-            wxMessageBox("Cannot open SQLite DB:\n" + path,
-                         "DB Error", wxOK|wxICON_ERROR, this);
+            wxMessageBox("Cannot open SQLite DB:\n"+path,"DB Error",wxOK|wxICON_ERROR,this);
             tab.db.reset();
-            // Continue connecting even without DB
         }
         else
         {
-            // Build session id: timestamp_host
-            wxDateTime now = wxDateTime::Now();
-            tab.sessionId  = now.Format("%Y%m%d%H%M%S").ToStdString()
-                           + "_" + tab.host->GetValue().ToStdString();
+            tab.sessionId=wxDateTime::Now().Format("%Y%m%d%H%M%S").ToStdString()
+                         +"_"+tab.host->GetValue().ToStdString();
         }
     }
 
-    // ── SSH callback (queues to main thread) ──
-    tab.reader->SetCallback(
-        [this, tabIndex](const std::string& line)
-        {
-            auto* evt = new wxThreadEvent(EVT_SSH_LOG);
-            evt->SetInt((int)tabIndex);
-            evt->SetString(wxString::FromUTF8(line));
-            wxQueueEvent(this, evt);
-        });
+    tab.reader->SetCallback([this,tabIndex](const std::string& line){
+        auto* evt=new wxThreadEvent(EVT_SSH_LOG);
+        evt->SetInt((int)tabIndex);
+        evt->SetString(wxString::FromUTF8(line));
+        wxQueueEvent(this,evt);
+    });
 
-    std::string jargs = tab.journalArgs->GetValue().ToStdString();
-    if (jargs.empty()) jargs = "-f -o short-iso";
-    std::string cmd = "journalctl " + jargs;
+    std::string jargs=tab.journalArgs->GetValue().ToStdString();
+    if (jargs.empty()) jargs="-f -o short-iso";
 
-    bool ok = tab.reader->Connect(
-        tab.host->GetValue().ToStdString(),
-        tab.port->GetValue(),
-        tab.user->GetValue().ToStdString(),
-        tab.password->GetValue().ToStdString());
-
-    if (!ok)
-    {
+    bool ok=tab.reader->Connect(
+        tab.host->GetValue().ToStdString(), tab.port->GetValue(),
+        tab.user->GetValue().ToStdString(), tab.password->GetValue().ToStdString());
+    if (!ok){
         tab.reader->SetCallback(nullptr);
-        wxMessageBox("SSH connection failed.\nCheck host / port / credentials.",
-                     "Connect", wxOK|wxICON_ERROR, this);
+        wxMessageBox("SSH connection failed.","Connect",wxOK|wxICON_ERROR,this);
         return false;
     }
-
-    if (!tab.reader->Start(cmd))
-    {
-        tab.reader->SetCallback(nullptr);
-        tab.reader->Stop();
-        wxMessageBox("Connected but journalctl failed to start.",
-                     "Connect", wxOK|wxICON_ERROR, this);
+    if (!tab.reader->Start("journalctl "+jargs)){
+        tab.reader->SetCallback(nullptr); tab.reader->Stop();
+        wxMessageBox("journalctl failed to start.","Connect",wxOK|wxICON_ERROR,this);
         return false;
     }
-
     UpdateTabTitle(tabIndex);
-
-    auto* se = new wxThreadEvent(EVT_SSH_STATUS);
-    se->SetInt((int)tabIndex);
-    se->SetString("connected");
-    wxQueueEvent(this, se);
+    auto* se=new wxThreadEvent(EVT_SSH_STATUS);
+    se->SetInt((int)tabIndex); se->SetString("connected");
+    wxQueueEvent(this,se);
     return true;
 }
 
 void MainFrame::DoDisconnect(ConnectionTab& tab)
 {
-    tab.reader->SetCallback(nullptr);
-    tab.reader->Stop();
+    tab.reader->SetCallback(nullptr); tab.reader->Stop();
     if (tab.db) tab.db->Close();
 }
 
 void MainFrame::SaveLogsToFile(ConnectionTab& tab)
 {
-    const auto& entries = tab.logTable->AllEntries();
-    if (entries.empty()) { SetStatusText("No logs to save"); return; }
-
-    wxDateTime now = wxDateTime::Now();
-    wxString host  = tab.host->GetValue(); host.Replace(".", "_");
-    wxString defName = now.Format("%Y%m%d_%H%M%S_") + host + ".txt";
-
-    wxFileDialog dlg(this,"Save Logs","",defName,
-                     "Text files (*.txt)|*.txt|All files (*)|*",
+    const auto& entries=tab.logTable->AllEntries();
+    if (entries.empty()){SetStatusText("No logs");return;}
+    wxDateTime now=wxDateTime::Now();
+    wxString host=tab.host->GetValue(); host.Replace(".","_");
+    wxString def=now.Format("%Y%m%d_%H%M%S_")+host+".txt";
+    wxFileDialog dlg(this,"Save Logs","",def,
+                     "Text files (*.txt)|*.txt|All (*)|*",
                      wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
     if (dlg.ShowModal()!=wxID_OK) return;
-
     std::ofstream out(dlg.GetPath().ToStdString());
-    for (const auto& e : entries) out << e.raw << '\n';
-    SetStatusText("Saved: " + dlg.GetPath());
+    for (const auto& e:entries) out<<e.raw<<'\n';
+    SetStatusText("Saved: "+dlg.GetPath());
 }
 
-// ─────────────────────────────────────────────
 void MainFrame::OpenDatabaseInTab(const wxString& path)
 {
-    // Open the DB read-only by just querying it
-    auto db = std::make_unique<Database>();
-    if (!db->Open(path.ToStdString()))
-    {
-        wxMessageBox("Cannot open database:\n" + path,
-                     "Open DB", wxOK|wxICON_ERROR, this);
+    auto db=std::make_unique<Database>();
+    if (!db->Open(path.ToStdString())){
+        wxMessageBox("Cannot open:\n"+path,"Open DB",wxOK|wxICON_ERROR,this);
         return;
     }
-
-    // Get sessions to show in title
-    auto sessions = db->QuerySessions();
-    wxString tabTitle = wxFileName(path).GetFullName();
-
-    auto& tab = AddConnectionTab(tabTitle, true);
-    // Fill host field with the file name for reference
-    tab.host->SetValue(path);
-    tab.host->SetEditable(false);
-    tab.port->Disable();
-    tab.user->Disable();
-    tab.password->Disable();
-    tab.useSqlite->Disable();
-    tab.dbPath->Disable();
-
-    // Load all rows
-    std::vector<LogEntry> allEntries = db->QueryAllLogs();
-    tab.logTable->SetEntries(allEntries);
+    auto& tab=AddConnectionTab(wxFileName(path).GetFullName(),true);
+    tab.host->SetValue(path); tab.host->SetEditable(false);
+    tab.port->Disable(); tab.user->Disable(); tab.password->Disable();
+    tab.useSqlite->Disable(); tab.dbPath->Disable();
+    auto entries=db->QueryAllLogs();
+    tab.logTable->SetEntries(entries);
     tab.logTable->SetFilterConfig(&m_filterConfig);
-
-    // Keep db open so user can export from it via menu
-    tab.db        = std::move(db);
-    tab.sessionId = "";   // empty = all sessions for ExportText
-
+    tab.db=std::move(db);
+    tab.sessionId="";
     ApplyTheme();
-    SetStatusText(wxString::Format("Loaded %zu rows from %s",
-                                   allEntries.size(), path));
+    SetStatusText(wxString::Format("Loaded %zu rows from %s",entries.size(),path));
 }
 
 // ─────────────────────────────────────────────
@@ -611,22 +629,19 @@ void MainFrame::ApplyTheme()
     else               ApplyLightTheme(this);
     Refresh(); Layout();
 }
-
 void MainFrame::ApplyDarkTheme(wxWindow* w)
 {
-    static const wxColour bg(30,31,34), fg(220,220,220), field(20,21,24);
-    if (dynamic_cast<wxTextCtrl*>(w) || dynamic_cast<wxListCtrl*>(w))
-    { w->SetBackgroundColour(field); w->SetForegroundColour(fg); }
-    else
-    { w->SetBackgroundColour(bg); w->SetForegroundColour(fg); }
-    for (auto* c : w->GetChildren()) ApplyDarkTheme(c);
+    static const wxColour bg(30,31,34),fg(220,220,220),field(20,21,24);
+    if (dynamic_cast<wxTextCtrl*>(w)||dynamic_cast<wxListCtrl*>(w))
+    {w->SetBackgroundColour(field);w->SetForegroundColour(fg);}
+    else{w->SetBackgroundColour(bg);w->SetForegroundColour(fg);}
+    for(auto* c:w->GetChildren()) ApplyDarkTheme(c);
 }
-
 void MainFrame::ApplyLightTheme(wxWindow* w)
 {
     w->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
     w->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
-    for (auto* c : w->GetChildren()) ApplyLightTheme(c);
+    for(auto* c:w->GetChildren()) ApplyLightTheme(c);
 }
 
 // ─────────────────────────────────────────────
@@ -634,47 +649,36 @@ void MainFrame::ApplyLightTheme(wxWindow* w)
 // ─────────────────────────────────────────────
 void MainFrame::OnMenuNewTab(wxCommandEvent&)
 {
-    AddConnectionTab(wxString::Format("Connection %zu", m_tabs.size()+1), true);
+    AddConnectionTab(wxString::Format("Connection %zu",m_tabs.size()+1),true);
     ApplyTheme(); SaveSettings();
 }
-void MainFrame::OnMenuCloseTab(wxCommandEvent&) { CloseConnectionTab(CurrentTabIndex()); }
-void MainFrame::OnMenuSave(wxCommandEvent&) { auto* t=CurrentTab(); if(t) SaveLogsToFile(*t); }
+void MainFrame::OnMenuCloseTab(wxCommandEvent&){CloseConnectionTab(CurrentTabIndex());}
+void MainFrame::OnMenuSave(wxCommandEvent&){auto* t=CurrentTab();if(t)SaveLogsToFile(*t);}
 
 void MainFrame::OnMenuSaveDb(wxCommandEvent&)
 {
-    auto* tab = CurrentTab();
-    if (!tab) return;
-
-    if (!tab->db || !tab->db->IsOpen())
-    {
-        wxMessageBox("SQLite logging is not enabled for this tab.\n"
-                     "Enable 'SQLite > Enable' and reconnect first.",
-                     "Save to SQLite", wxOK|wxICON_INFORMATION, this);
+    auto* tab=CurrentTab(); if(!tab) return;
+    if (!tab->db||!tab->db->IsOpen()){
+        wxMessageBox("SQLite not enabled for this tab.\nEnable it and reconnect.",
+                     "SQLite",wxOK|wxICON_INFORMATION,this);
         return;
     }
-
-    // Export current session to text
-    wxDateTime now = wxDateTime::Now();
-    wxString host  = tab->host->GetValue(); host.Replace(".", "_");
-    wxString defName = now.Format("%Y%m%d_%H%M%S_") + host + "_export.txt";
-
-    wxFileDialog dlg(this,"Export SQLite to text","",defName,
-                     "Text files (*.txt)|*.txt|All files (*)|*",
+    wxDateTime now=wxDateTime::Now();
+    wxString host=tab->host->GetValue(); host.Replace(".","_");
+    wxString def=now.Format("%Y%m%d_%H%M%S_")+host+"_export.txt";
+    wxFileDialog dlg(this,"Export SQLite","",def,
+                     "Text files (*.txt)|*.txt|All (*)|*",
                      wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
     if (dlg.ShowModal()!=wxID_OK) return;
-
-    // sessionId empty = export all, non-empty = export session
-    bool ok = tab->db->ExportText(tab->sessionId, dlg.GetPath().ToStdString());
-    if (ok)
-        SetStatusText("Exported: " + dlg.GetPath());
-    else
-        SetStatusText("Export failed - check DB path");
+    if (tab->db->ExportText(tab->sessionId,dlg.GetPath().ToStdString()))
+        SetStatusText("Exported: "+dlg.GetPath());
+    else SetStatusText("Export failed");
 }
 
 void MainFrame::OnMenuOpenDb(wxCommandEvent&)
 {
-    wxFileDialog dlg(this,"Open SQLite Database","","",
-                     "SQLite files (*.db)|*.db|All files (*)|*",
+    wxFileDialog dlg(this,"Open SQLite DB","","",
+                     "SQLite files (*.db)|*.db|All (*)|*",
                      wxFD_OPEN|wxFD_FILE_MUST_EXIST);
     if (dlg.ShowModal()!=wxID_OK) return;
     OpenDatabaseInTab(dlg.GetPath());
@@ -684,7 +688,7 @@ void MainFrame::OnMenuConnect(wxCommandEvent&)
 {
     auto* tab=CurrentTab(); if(!tab) return;
     SetStatusText("Connecting..."); SaveSettings();
-    DoConnect(*tab, CurrentTabIndex());
+    DoConnect(*tab,CurrentTabIndex());
 }
 void MainFrame::OnMenuDisconnect(wxCommandEvent&)
 {
@@ -694,17 +698,30 @@ void MainFrame::OnMenuDisconnect(wxCommandEvent&)
 
 void MainFrame::OnMenuManageProfiles(wxCommandEvent&)
 {
-    wxDialog* dlg = CreateProfileDialog(this, m_profiles);
+    wxDialog* dlg=CreateProfileDialog(this,m_profiles);
     dlg->ShowModal(); dlg->Destroy();
     RebuildProfileMenu();
 }
 
+void MainFrame::OnMenuAutoStartSettings(wxCommandEvent&)
+{
+    // Simple dialog: let user set the encryption key + save now
+    wxPasswordEntryDialog keyDlg(this,
+        "Set encryption key for autostart.json\n(empty = keep current):",
+        "AutoStart Key");
+    if (keyDlg.ShowModal()==wxID_OK && !keyDlg.GetValue().IsEmpty())
+        m_autoStartKey=keyDlg.GetValue().ToStdString();
+
+    SaveAutoStart();
+    SetStatusText("autostart.json saved");
+}
+
 void MainFrame::OnMenuLoadProfile(wxCommandEvent& evt)
 {
-    int idx = evt.GetId()-ID_MENU_LOAD_PROFILE_BASE;
-    const auto& profs = m_profiles.Profiles();
-    if (idx<0 || (std::size_t)idx>=profs.size()) return;
-    const auto& p = profs[(std::size_t)idx];
+    int idx=evt.GetId()-ID_MENU_LOAD_PROFILE_BASE;
+    const auto& profs=m_profiles.Profiles();
+    if (idx<0||(std::size_t)idx>=profs.size()) return;
+    const auto& p=profs[(std::size_t)idx];
     auto* tab=CurrentTab(); if(!tab) return;
     tab->host->SetValue(wxString::FromUTF8(p.host));
     tab->port->SetValue(p.port);
@@ -714,122 +731,117 @@ void MainFrame::OnMenuLoadProfile(wxCommandEvent& evt)
     tab->journalArgs->SetValue(wxString::FromUTF8(p.journalArgs));
     tab->profileIndex=idx;
     UpdateTabTitle(CurrentTabIndex());
-    SetStatusText("Profile: " + wxString::FromUTF8(p.name.empty()?p.host:p.name));
+    SetStatusText("Profile: "+wxString::FromUTF8(p.name.empty()?p.host:p.name));
 }
 
 void MainFrame::OnMenuApplyFilter(wxCommandEvent&)
 {
     auto* tab=CurrentTab(); if(!tab) return;
-    std::string f = tab->filter->GetValue().ToStdString();
-    if (f.empty()) { tab->logTable->ClearFilter(); tab->activeFilter.clear();
-                     SetStatusText("Filter cleared"); return; }
-    std::size_t shown = tab->logTable->ApplyFilter(f);
-    tab->activeFilter = f;
-    SetStatusText(wxString::Format("Filter: %zu rows shown", shown));
+    std::string pos=tab->filter->GetValue().ToStdString();
+    std::string neg=tab->negFilter->GetValue().ToStdString();
+    if (pos.empty()&&neg.empty()){
+        tab->logTable->ClearFilter(); tab->activeFilter.clear(); tab->activeNegFilter.clear();
+        SetStatusText("Filter cleared"); return;
+    }
+    std::size_t shown=tab->logTable->ApplyFilter(pos,neg);
+    tab->activeFilter=pos; tab->activeNegFilter=neg;
+    SetStatusText(wxString::Format("Filter: %zu rows shown",shown));
 }
 
 void MainFrame::OnMenuClearFilter(wxCommandEvent&)
 {
     auto* tab=CurrentTab(); if(!tab) return;
-    tab->logTable->ClearFilter(); tab->activeFilter.clear();
+    tab->logTable->ClearFilter();
+    tab->activeFilter.clear(); tab->activeNegFilter.clear();
     SetStatusText("Filter cleared");
 }
 
 void MainFrame::OnMenuUploadFile(wxCommandEvent&)
 {
     auto* tab=CurrentTab();
-    if (!tab || !tab->reader->IsRunning()) { SetStatusText("Not connected"); return; }
+    if (!tab||!tab->reader->IsRunning()){SetStatusText("Not connected");return;}
     wxFileDialog fDlg(this,"Select file","","","*.*",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
     if (fDlg.ShowModal()!=wxID_OK) return;
     wxTextEntryDialog dDlg(this,"Remote directory:","SCP Upload","/tmp");
     if (dDlg.ShowModal()!=wxID_OK) return;
     SetStatusText("Uploading...");
-    if (tab->reader->UploadFile(fDlg.GetPath().ToStdString(), dDlg.GetValue().ToStdString()))
+    if (tab->reader->UploadFile(fDlg.GetPath().ToStdString(),dDlg.GetValue().ToStdString()))
         SetStatusText("Upload complete");
-    else
-        SetStatusText("Upload failed");
+    else SetStatusText("Upload failed");
 }
 
 void MainFrame::OnMenuExecuteCommand(wxCommandEvent&)
 {
     auto* tab=CurrentTab();
-    if (!tab || !tab->reader->IsRunning()) { SetStatusText("Not connected"); return; }
+    if (!tab||!tab->reader->IsRunning()){SetStatusText("Not connected");return;}
     wxTextEntryDialog dlg(this,"Remote command:","Run Command","uname -a");
     if (dlg.ShowModal()!=wxID_OK) return;
     std::string output;
     SetStatusText("Running...");
-    if (!tab->reader->ExecuteCommand(dlg.GetValue().ToStdString(), output))
-    { SetStatusText("Command failed"); return; }
-    auto& out = AddConnectionTab("$ "+dlg.GetValue().Left(20), true);
+    if (!tab->reader->ExecuteCommand(dlg.GetValue().ToStdString(),output))
+    {SetStatusText("Command failed");return;}
+    auto& out=AddConnectionTab("$ "+dlg.GetValue().Left(20),true);
     out.host->SetValue(tab->host->GetValue());
     out.logTable->AppendLine("$ "+dlg.GetValue().ToStdString()+"\n\n"+output);
     ApplyTheme(); SaveSettings();
-    SetStatusText("Command output in new tab");
+    SetStatusText("Output in new tab");
 }
 
 void MainFrame::OnMenuDarkTheme(wxCommandEvent& evt)
 {
-    m_darkEnabled=evt.IsChecked();
-    ApplyTheme(); SaveSettings();
+    m_darkEnabled=evt.IsChecked(); ApplyTheme(); SaveSettings();
 }
 
 void MainFrame::OnMenuFilterConfig(wxCommandEvent&)
 {
-    wxDialog* dlg = CreateFilterConfigDialog(this, m_filterConfig);
+    wxDialog* dlg=CreateFilterConfigDialog(this,m_filterConfig);
     dlg->ShowModal(); dlg->Destroy();
     ApplyFilterConfigToAllTabs();
-    // Auto-save on close
     m_filterConfig.SaveToFile("filters.json");
 }
-
 void MainFrame::OnMenuLoadFilterJson(wxCommandEvent&)
 {
     wxFileDialog dlg(this,"Load Filter JSON","","",
-                     "JSON files (*.json)|*.json|All files (*)|*",
-                     wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+                     "JSON files (*.json)|*.json|All (*)|*",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
     if (dlg.ShowModal()!=wxID_OK) return;
     if (m_filterConfig.LoadFromFile(dlg.GetPath().ToStdString()))
-    {
-        ApplyFilterConfigToAllTabs();
-        SetStatusText("Filters loaded: " + dlg.GetPath());
-    }
-    else
-        wxMessageBox("Failed to load filter JSON","Error",wxOK|wxICON_ERROR,this);
+    {ApplyFilterConfigToAllTabs();SetStatusText("Filters loaded: "+dlg.GetPath());}
+    else wxMessageBox("Failed to load","Error",wxOK|wxICON_ERROR,this);
 }
-
 void MainFrame::OnMenuSaveFilterJson(wxCommandEvent&)
 {
     wxFileDialog dlg(this,"Save Filter JSON","","filters.json",
-                     "JSON files (*.json)|*.json|All files (*)|*",
-                     wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
+                     "JSON files (*.json)|*.json|All (*)|*",wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
     if (dlg.ShowModal()!=wxID_OK) return;
     if (m_filterConfig.SaveToFile(dlg.GetPath().ToStdString()))
-        SetStatusText("Filters saved: " + dlg.GetPath());
-    else
-        wxMessageBox("Failed to save filter JSON","Error",wxOK|wxICON_ERROR,this);
+        SetStatusText("Filters saved: "+dlg.GetPath());
+    else wxMessageBox("Failed to save","Error",wxOK|wxICON_ERROR,this);
 }
 
 // ─────────────────────────────────────────────
 void MainFrame::OnSSHLog(wxThreadEvent& evt)
 {
-    AppendLog((std::size_t)evt.GetInt(), evt.GetString().ToStdString());
+    AppendLog((std::size_t)evt.GetInt(),evt.GetString().ToStdString());
 }
-
 void MainFrame::OnSSHStatus(wxThreadEvent& evt)
 {
-    std::size_t idx = (std::size_t)evt.GetInt();
-    wxString    status = evt.GetString();
-    SetStatusText(wxString::Format("Tab %zu: %s", idx+1, status));
-    if (idx < m_tabs.size())
+    std::size_t idx=(std::size_t)evt.GetInt();
+    wxString status=evt.GetString();
+    SetStatusText(wxString::Format("Tab %zu: %s",idx+1,status));
+    if (idx<m_tabs.size())
     {
-        wxString suf = (status=="connected") ? wxString(" [on]") : wxString(" [off]");
-        m_notebook->SetPageText((int)idx, m_tabs[idx]->host->GetValue()+suf);
+        wxString suf=(status=="connected")?wxString(" [on]"):wxString(" [off]");
+        m_notebook->SetPageText((int)idx,m_tabs[idx]->host->GetValue()+suf);
     }
 }
-
+void MainFrame::OnNotebookPageChanged(wxNotebookEvent&)
+{
+    // No-op for now; sidebar is per-tab so nothing to sync
+}
 void MainFrame::OnClose(wxCloseEvent& evt)
 {
     SaveSettings();
+    SaveAutoStart();
     m_filterConfig.SaveToFile("filters.json");
     evt.Skip();
 }
@@ -838,7 +850,7 @@ bool JournalApp::OnInit()
 {
     wxApp::SetVendorName("DRSSH");
     wxApp::SetAppName("RemoteJournal");
-    auto* frame = new MainFrame();
+    auto* frame=new MainFrame();
     frame->Show();
     return true;
 }

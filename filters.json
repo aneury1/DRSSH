@@ -2,12 +2,12 @@
    "rules" : [
       {
          "application" : "",
-         "bgColour" : "#FFE01B24",
+         "bgColour" : "#FFFFFFFF",
          "enabled" : true,
-         "fgColour" : "#FFF8E45C",
+         "fgColour" : "#FF000000",
          "fixedPayload" : "",
-         "name" : "systemd",
-         "payloadRegex" : "systemd",
+         "name" : "New Rule",
+         "payloadRegex" : "",
          "tsFrom" : "",
          "tsTo" : ""
       }

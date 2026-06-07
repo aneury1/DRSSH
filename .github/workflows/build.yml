@@ -1,0 +1,160 @@
+name: Build RemoteJournal
+
+on:
+  push:
+    branches: [ "main", "master", "develop" ]
+    tags:     [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+
+  # ── Linux ──────────────────────────────────────────────────────────────────
+  build-linux:
+    name: Linux · Ubuntu 22.04
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build pkg-config \
+            libwxgtk3.0-gtk3-dev \
+            libssh-dev \
+            libsqlite3-dev \
+            libjsoncpp-dev \
+            libgl1-mesa-dev libglu1-mesa-dev
+
+      - name: Configure
+        run: cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Verify & strip
+        run: |
+          test -f build/RemoteJournal
+          file build/RemoteJournal
+          strip build/RemoteJournal
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist
+          cp build/RemoteJournal dist/
+          tar -czf RemoteJournal-linux-x86_64.tar.gz -C dist RemoteJournal
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteJournal-linux-x86_64
+          path: RemoteJournal-linux-x86_64.tar.gz
+          retention-days: 30
+
+  # ── Windows ────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Windows · MinGW-w64
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 / MINGW64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-wxwidgets3.2-msw
+            mingw-w64-x86_64-libssh
+            mingw-w64-x86_64-sqlite3
+            mingw-w64-x86_64-jsoncpp
+            mingw-w64-x86_64-pkg-config
+            zip
+
+      - name: Configure
+        run: |
+          cmake -B build -S . \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Verify binary
+        run: test -f build/RemoteJournal.exe
+
+      - name: Bundle runtime DLLs
+        run: |
+          mkdir -p dist
+          cp build/RemoteJournal.exe dist/
+
+          # Collect every MinGW DLL the exe needs
+          ldd build/RemoteJournal.exe \
+            | grep -i mingw \
+            | awk '{print $3}' \
+            | xargs -I{} cp {} dist/ 2>/dev/null || true
+
+          # wxWidgets image-format plugins (optional but useful)
+          PLUGIN_DIR="$(wx-config --exec-prefix)/lib/wx/$(wx-config --release)"
+          if [ -d "$PLUGIN_DIR" ]; then
+            mkdir -p dist/wxplugins
+            cp "$PLUGIN_DIR"/*.dll dist/wxplugins/ 2>/dev/null || true
+          fi
+
+          echo "=== dist contents ==="
+          ls -lh dist/
+
+      - name: Create zip
+        run: |
+          cd dist
+          zip -r ../RemoteJournal-windows-x86_64.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteJournal-windows-x86_64
+          path: RemoteJournal-windows-x86_64.zip
+          retention-days: 30
+
+  # ── GitHub Release (tag-triggered) ─────────────────────────────────────────
+  release:
+    name: Publish Release
+    needs: [ build-linux, build-windows ]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RemoteJournal-linux-x86_64
+          path: artifacts/
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RemoteJournal-windows-x86_64
+          path: artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/RemoteJournal-linux-x86_64.tar.gz
+            artifacts/RemoteJournal-windows-x86_64.zip
+          generate_release_notes: true

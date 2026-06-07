@@ -3,11 +3,11 @@
 #include "ConnectionTab.h"
 #include "ConnectionProfile.h"
 #include "FilterConfig.h"
+#include "AutoStart.h"
 
 #include <wx/frame.h>
 #include <wx/notebook.h>
-#include <wx/button.h>
-#include <wx/tglbtn.h>
+#include <wx/splitter.h>
 #include <wx/menu.h>
 #include <wx/statusbr.h>
 
@@ -21,14 +21,15 @@ public:
     MainFrame();
     ~MainFrame();
 
-    // Applied to all tabs' log tables
     void ApplyFilterConfigToAllTabs();
 
 private:
     void BuildMenu();
-    void BuildToolBar();
     void CreateControls();
     void RebuildProfileMenu();
+
+    // Left-panel sidebar (connection + filter controls)
+    wxPanel* BuildSidebar(wxWindow* parent, ConnectionTab& tab);
 
     ConnectionTab& AddConnectionTab(const wxString& title, bool select);
     void           UpdateTabTitle(std::size_t index);
@@ -38,7 +39,6 @@ private:
     std::size_t    CurrentTabIndex() const;
 
     void AppendLog(std::size_t tabIndex, const std::string& line);
-    void RefreshFilteredLogs(ConnectionTab& tab);
 
     void LoadSettings();
     void SaveSettings();
@@ -50,9 +50,12 @@ private:
     bool DoConnect(ConnectionTab& tab, std::size_t tabIndex);
     void DoDisconnect(ConnectionTab& tab);
     void SaveLogsToFile(ConnectionTab& tab);
-
-    // Open an existing .db file and show it in a new tab
     void OpenDatabaseInTab(const wxString& path);
+
+    // AutoStart
+    void LoadAutoStart();
+    void SaveAutoStart();
+    void OnMenuAutoStartSettings(wxCommandEvent&);
 
     // Menu handlers
     void OnMenuNewTab(wxCommandEvent&);
@@ -75,16 +78,19 @@ private:
 
     void OnSSHLog(wxThreadEvent&);
     void OnSSHStatus(wxThreadEvent&);
+    void OnNotebookPageChanged(wxNotebookEvent&);
     void OnClose(wxCloseEvent&);
 
 private:
-    wxNotebook* m_notebook{};
-    wxMenuBar*  m_menuBar{};
-    wxMenu*     m_profileMenu{};
+    wxNotebook*    m_notebook{};
+    wxMenuBar*     m_menuBar{};
+    wxMenu*        m_profileMenu{};
 
     std::vector<std::unique_ptr<ConnectionTab>> m_tabs;
     ProfileManager  m_profiles;
     FilterConfig    m_filterConfig;
+    AutoStartConfig m_autoStart;
+    std::string     m_autoStartKey{"RemoteJournal2024"}; // default enc key
     bool            m_darkEnabled{false};
 
     enum {
@@ -96,6 +102,7 @@ private:
         ID_MENU_CONNECT,
         ID_MENU_DISCONNECT,
         ID_MENU_MANAGE_PROFILES,
+        ID_MENU_AUTOSTART,
         ID_MENU_LOAD_PROFILE_BASE,
         ID_MENU_APPLY_FILTER = ID_MENU_LOAD_PROFILE_BASE + 50,
         ID_MENU_CLEAR_FILTER,

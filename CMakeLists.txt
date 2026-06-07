@@ -26,6 +26,7 @@ set(SOURCES
     src/SSHJournalReader.cpp
     src/ConnectionProfile.cpp
     src/FilterConfig.cpp
+    src/AutoStart.cpp
     src/LogTableCtrl.cpp
     src/ProfileDialog.cpp
     src/FilterConfigDialog.cpp

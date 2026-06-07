@@ -11,19 +11,19 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 #include <optional>
 #include <regex>
 
 struct ConnectionTab
 {
-    // UI widgets (all owned by the notebook page)
+    // UI (owned by notebook page)
     wxPanel*       page{};
     wxTextCtrl*    host{};
     wxSpinCtrl*    port{};
     wxTextCtrl*    user{};
     wxTextCtrl*    password{};
-    wxTextCtrl*    filter{};
+    wxTextCtrl*    filter{};       // positive regex filter
+    wxTextCtrl*    negFilter{};    // negative regex filter (exclude matches)
     wxTextCtrl*    journalArgs{};
     wxCheckBox*    useSqlite{};
     wxTextCtrl*    dbPath{};
@@ -35,10 +35,11 @@ struct ConnectionTab
     std::unique_ptr<Database>         db;
     std::string                       sessionId;
 
-    // Active filter
-    std::string              activeFilter;
+    // Active filters
+    std::string               activeFilter;
+    std::string               activeNegFilter;
     std::optional<std::regex> activeRegex;
+    std::optional<std::regex> activeNegRegex;
 
-    // Profile this tab was loaded from (-1 = none)
     int profileIndex{-1};
 };
