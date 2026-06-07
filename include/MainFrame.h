@@ -2,6 +2,7 @@
 #include "Events.h"
 #include "ConnectionTab.h"
 #include "ConnectionProfile.h"
+#include "FilterConfig.h"
 
 #include <wx/frame.h>
 #include <wx/notebook.h>
@@ -19,6 +20,9 @@ class MainFrame : public wxFrame
 public:
     MainFrame();
     ~MainFrame();
+
+    // Applied to all tabs' log tables
+    void ApplyFilterConfigToAllTabs();
 
 private:
     void BuildMenu();
@@ -47,11 +51,15 @@ private:
     void DoDisconnect(ConnectionTab& tab);
     void SaveLogsToFile(ConnectionTab& tab);
 
+    // Open an existing .db file and show it in a new tab
+    void OpenDatabaseInTab(const wxString& path);
+
     // Menu handlers
     void OnMenuNewTab(wxCommandEvent&);
     void OnMenuCloseTab(wxCommandEvent&);
     void OnMenuSave(wxCommandEvent&);
     void OnMenuSaveDb(wxCommandEvent&);
+    void OnMenuOpenDb(wxCommandEvent&);
     void OnMenuConnect(wxCommandEvent&);
     void OnMenuDisconnect(wxCommandEvent&);
     void OnMenuManageProfiles(wxCommandEvent&);
@@ -61,6 +69,9 @@ private:
     void OnMenuUploadFile(wxCommandEvent&);
     void OnMenuExecuteCommand(wxCommandEvent&);
     void OnMenuDarkTheme(wxCommandEvent&);
+    void OnMenuFilterConfig(wxCommandEvent&);
+    void OnMenuLoadFilterJson(wxCommandEvent&);
+    void OnMenuSaveFilterJson(wxCommandEvent&);
 
     void OnSSHLog(wxThreadEvent&);
     void OnSSHStatus(wxThreadEvent&);
@@ -73,6 +84,7 @@ private:
 
     std::vector<std::unique_ptr<ConnectionTab>> m_tabs;
     ProfileManager  m_profiles;
+    FilterConfig    m_filterConfig;
     bool            m_darkEnabled{false};
 
     enum {
@@ -80,6 +92,7 @@ private:
         ID_MENU_CLOSE_TAB,
         ID_MENU_SAVE,
         ID_MENU_SAVE_DB,
+        ID_MENU_OPEN_DB,
         ID_MENU_CONNECT,
         ID_MENU_DISCONNECT,
         ID_MENU_MANAGE_PROFILES,
@@ -89,6 +102,9 @@ private:
         ID_MENU_UPLOAD_FILE,
         ID_MENU_EXECUTE_COMMAND,
         ID_MENU_DARK_THEME,
+        ID_MENU_FILTER_CONFIG,
+        ID_MENU_LOAD_FILTER_JSON,
+        ID_MENU_SAVE_FILTER_JSON,
     };
 
     wxDECLARE_EVENT_TABLE();

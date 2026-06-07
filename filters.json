@@ -1,0 +1,15 @@
+{
+   "rules" : [
+      {
+         "application" : "",
+         "bgColour" : "#FFE01B24",
+         "enabled" : true,
+         "fgColour" : "#FFF8E45C",
+         "fixedPayload" : "",
+         "name" : "systemd",
+         "payloadRegex" : "systemd",
+         "tsFrom" : "",
+         "tsTo" : ""
+      }
+   ]
+}
