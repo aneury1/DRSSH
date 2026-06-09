@@ -4,6 +4,7 @@
 #include <wx/listctrl.h>
 #include <wx/textctrl.h>
 #include <vector>
+#include <deque>
 #include <string>
 #include <optional>
 #include <regex>
@@ -33,7 +34,7 @@ public:
                              const std::string& negPattern = "");
     void        ClearFilter();
 
-    void SetFilterConfig(const FilterConfig* cfg) { m_filterCfg = cfg; Refresh(); }
+    void SetFilterConfig(const FilterConfig* cfg);
 
     const std::vector<LogEntry>& AllEntries()     const { return m_all; }
     const std::vector<LogEntry>& VisibleEntries() const { return m_visible; }
@@ -58,7 +59,15 @@ private:
     wxTextCtrl*         m_payloadCtrl{nullptr};
     const FilterConfig* m_filterCfg{nullptr};
 
-    mutable wxListItemAttr m_attr;
+    // Per-row attribute cache — one entry per visible row.
+    // Rebuilt in SetEntries/ApplyFilter/AppendLine; avoids the
+    // single-shared-instance bug where all rows get the last colour.
+    // deque: push_back never invalidates existing element pointers.
+    // This is critical because wx may hold a raw pointer (from OnGetItemAttr)
+    // across the same paint cycle where AppendLine runs.
+    mutable std::deque<wxListItemAttr> m_attrCache;
+    void RebuildAttrCache();
+    void AppendOneAttr(const LogEntry& e);
 
     wxDECLARE_EVENT_TABLE();
 };

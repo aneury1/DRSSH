@@ -140,8 +140,9 @@ wxPanel* MainFrame::BuildSidebar(wxWindow* parent, ConnectionTab& tab)
 {
     // Scrollable sidebar so nothing gets cut off on small screens
     auto* scroll = new wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition,
-                                        wxSize(280,-1), wxVSCROLL);
+                                        wxSize(280, 400), wxVSCROLL);
     scroll->SetScrollRate(0, 8);
+    scroll->SetMinSize(wxSize(220, 200));  // prevent GTK scrollbar at size <= 0
 
     auto* root = new wxBoxSizer(wxVERTICAL);
 
@@ -222,9 +223,6 @@ wxPanel* MainFrame::BuildSidebar(wxWindow* parent, ConnectionTab& tab)
     root->FitInside(scroll);
 
     // ── Button bindings ─────────────────────────────────
-    // We need to find the tab later by pointer so capture it
-    ConnectionTab* tabPtr = &tab;
-
     btnConn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&){
         auto* t=CurrentTab(); if(!t) return;
         SetStatusText("Connecting..."); SaveSettings();
@@ -237,17 +235,16 @@ wxPanel* MainFrame::BuildSidebar(wxWindow* parent, ConnectionTab& tab)
     btnApply->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e){ OnMenuApplyFilter(e); });
     btnClear->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e){ OnMenuClearFilter(e); });
 
-    btnSaveFilt->Bind(wxEVT_BUTTON, [this, tabPtr](wxCommandEvent&){
-        // Make sure this tab is still alive
-        bool found = false;
-        for (auto& t : m_tabs) if (t.get()==tabPtr) { found=true; break; }
-        if (!found) return;
+    btnSaveFilt->Bind(wxEVT_BUTTON, [this](wxCommandEvent&){
+        // Always look up the current tab by index — never hold raw tab pointer.
+        auto* t = CurrentTab();
+        if (!t) return;
 
-        const auto& vis = tabPtr->logTable->VisibleEntries();
+        const auto& vis = t->logTable->VisibleEntries();
         if (vis.empty()) { SetStatusText("No filtered lines to save"); return; }
 
         wxDateTime now=wxDateTime::Now();
-        wxString host=tabPtr->host->GetValue(); host.Replace(".","-");
+        wxString host=t->host->GetValue(); host.Replace(".","-");
         wxString def=now.Format("%Y%m%d_%H%M%S_")+host+"_filtered.txt";
         wxFileDialog dlg(this,"Save Filtered Lines","",def,
                          "Text files (*.txt)|*.txt|All (*)|*",
@@ -289,10 +286,12 @@ ConnectionTab& MainFrame::AddConnectionTab(const wxString& title, bool select)
     tab->logTable->SetFilterConfig(&m_filterConfig);
 
     vSplit->SplitHorizontally(tab->logTable, tab->payloadCtrl, -180);
-    vSplit->SetMinimumPaneSize(60);
+    vSplit->SetMinimumPaneSize(80);  // prevents GTK scrollbar negative-size crash
+    vSplit->SetSashGravity(1.0);     // log table takes all resize space
 
     hSplit->SplitVertically(sidebar, vSplit, 280);
-    hSplit->SetMinimumPaneSize(200);
+    hSplit->SetMinimumPaneSize(220);
+    hSplit->SetSashGravity(0.0);     // sidebar keeps its width on frame resize
 
     auto* root = new wxBoxSizer(wxVERTICAL);
     root->Add(hSplit, 1, wxEXPAND);
@@ -318,12 +317,25 @@ void MainFrame::CloseConnectionTab(std::size_t index)
 {
     if (m_tabs.size()==1){SetStatusText("Cannot close the last tab");return;}
     auto* t=TabAt(index); if(!t) return;
+
+    // 1. Stop background thread FIRST so no EVT_SSH_LOG arrives for this index.
     if (t->reader){t->reader->SetCallback(nullptr);t->reader->Stop();}
     if (t->db) t->db->Close();
-    m_notebook->DeletePage((int)index);
+
+    // 2. Remove from our vector BEFORE telling the notebook to destroy the page.
+    //    This ensures AppendLog() cannot touch a dead index even if a queued
+    //    event slips through between step 1 and the DeletePage call.
     m_tabs.erase(m_tabs.begin()+(std::ptrdiff_t)index);
-    std::size_t next=(index>=m_tabs.size())?m_tabs.size()-1:index;
-    if (!m_tabs.empty()) m_notebook->SetSelection((int)next);
+
+    // 3. Now it is safe to destroy the wx widgets.
+    m_notebook->DeletePage((int)index);
+
+    // 4. Clamp selection.
+    if (!m_tabs.empty())
+    {
+        std::size_t next=(index>=m_tabs.size())?m_tabs.size()-1:index;
+        m_notebook->SetSelection((int)next);
+    }
     SaveSettings();
 }
 
