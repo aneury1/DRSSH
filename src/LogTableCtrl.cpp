@@ -5,6 +5,11 @@
 wxBEGIN_EVENT_TABLE(LogTableCtrl, wxListCtrl)
     EVT_LIST_ITEM_SELECTED(wxID_ANY,   LogTableCtrl::OnItemSelected)
     EVT_LIST_ITEM_DESELECTED(wxID_ANY, LogTableCtrl::OnItemDeselected)
+    EVT_CONTEXT_MENU(                  LogTableCtrl::OnContextMenu)
+    EVT_MENU(ID_CTX_COPY_ROWS,         LogTableCtrl::OnCopyRows)
+    EVT_MENU(ID_CTX_COPY_RAW,          LogTableCtrl::OnCopyRows)
+    EVT_MENU(ID_CTX_COPY_CELL,         LogTableCtrl::OnCopyCell)
+    EVT_MENU(ID_CTX_SELECT_ALL,        LogTableCtrl::OnCopyRows)
 wxEND_EVENT_TABLE()
 
 static wxColour fromARGB(uint32_t c)
@@ -258,4 +263,146 @@ void LogTableCtrl::ShowPayload(long item)
     p << "PID       : " << wxString::FromUTF8(e.pid)       << "\n";
     p << "Message   : " << wxString::FromUTF8(e.message)   << "\n";
     m_payloadCtrl->SetValue(p);
+}
+
+// ── Context menu ─────────────────────────────────────────────────────────────
+void LogTableCtrl::OnContextMenu(wxContextMenuEvent& evt)
+{
+    // Record which row was right-clicked (may be -1 if on empty area)
+    wxPoint pt = ScreenToClient(evt.GetPosition());
+    int flags = 0;
+    m_contextItem = HitTest(pt, flags);
+
+    int selCount = GetSelectedItemCount();
+
+    wxMenu menu;
+
+    if (selCount > 1)
+        menu.Append(ID_CTX_COPY_ROWS, wxString::Format("Copy %d selected rows (TSV)", selCount));
+    else
+        menu.Append(ID_CTX_COPY_ROWS, "Copy row (TSV)");
+
+    menu.Append(ID_CTX_COPY_RAW,  selCount > 1
+                                   ? wxString::Format("Copy %d raw lines", selCount)
+                                   : wxString("Copy raw line"));
+
+    if (m_contextItem >= 0)
+    {
+        menu.AppendSeparator();
+        menu.Append(ID_CTX_COPY_CELL, "Copy cell under cursor");
+    }
+
+    menu.AppendSeparator();
+    menu.Append(ID_CTX_SELECT_ALL, "Select all visible rows");
+
+    PopupMenu(&menu);
+}
+
+wxString LogTableCtrl::SelectedRowsAsText(bool rawOnly) const
+{
+    // Collect selected rows; if none selected use the context-menu row;
+    // if that is also -1, use all visible rows.
+    std::vector<LogEntry> rows = GetSelectedEntries();
+
+    if (rows.empty() && m_contextItem >= 0 &&
+        (std::size_t)m_contextItem < m_visible.size())
+        rows.push_back(m_visible[(std::size_t)m_contextItem]);
+
+    if (rows.empty())
+        rows = m_visible;   // fallback: all visible
+
+    if (rows.empty()) return {};
+
+    wxString text;
+
+    if (rawOnly)
+    {
+        for (const auto& e : rows)
+            text << wxString::FromUTF8(e.raw) << "\n";
+        return text;
+    }
+
+    // TSV header
+    text << "Timestamp\tHostname\tService\tPID\tMessage\n";
+
+    for (const auto& e : rows)
+    {
+        auto clean = [](const std::string& s) -> wxString {
+            wxString w = wxString::FromUTF8(s);
+            w.Replace("\t", " ");   // no tabs inside cells
+            return w;
+        };
+        text << clean(e.timestamp) << "\t"
+             << clean(e.hostname)  << "\t"
+             << clean(e.service)   << "\t"
+             << clean(e.pid)       << "\t"
+             << clean(e.message)   << "\n";
+    }
+    return text;
+}
+
+void LogTableCtrl::OnCopyRows(wxCommandEvent& evt)
+{
+    if (evt.GetId() == ID_CTX_SELECT_ALL)
+    {
+        // Select all visible items
+        for (long i = 0; i < (long)m_visible.size(); ++i)
+            SetItemState(i, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
+        return;
+    }
+
+    bool rawOnly = (evt.GetId() == ID_CTX_COPY_RAW);
+    wxString text = SelectedRowsAsText(rawOnly);
+    if (text.IsEmpty()) return;
+
+    if (wxTheClipboard->Open())
+    {
+        wxTheClipboard->SetData(new wxTextDataObject(text));
+        wxTheClipboard->Close();
+    }
+}
+
+void LogTableCtrl::OnCopyCell(wxCommandEvent&)
+{
+    if (m_contextItem < 0 || (std::size_t)m_contextItem >= m_visible.size()) return;
+
+    // Figure out which column was clicked by comparing cursor X to column widths
+    wxPoint cursorLocal = ScreenToClient(wxGetMousePosition());
+    int flags = 0;
+    HitTest(cursorLocal, flags);   // updates flags but not column directly
+
+    // Walk columns to find which one contains the X coordinate
+    int x = cursorLocal.x;
+    // GetScrollPos gives horizontal scroll offset
+    x += GetScrollPos(wxHORIZONTAL);
+
+    int colStart = 0;
+    int clickedCol = 4;   // default to message
+    for (int c = 0; c < GetColumnCount(); ++c)
+    {
+        int w = GetColumnWidth(c);
+        if (x >= colStart && x < colStart + w)
+        {
+            clickedCol = c;
+            break;
+        }
+        colStart += w;
+    }
+
+    const LogEntry& e = m_visible[(std::size_t)m_contextItem];
+    wxString cell;
+    switch (clickedCol)
+    {
+        case 0: cell = wxString::FromUTF8(e.timestamp); break;
+        case 1: cell = wxString::FromUTF8(e.hostname);  break;
+        case 2: cell = wxString::FromUTF8(e.service);   break;
+        case 3: cell = wxString::FromUTF8(e.pid);       break;
+        default: cell = wxString::FromUTF8(e.message);  break;
+    }
+
+    if (!cell.IsEmpty() && wxTheClipboard->Open())
+    {
+        wxTheClipboard->SetData(new wxTextDataObject(cell));
+        wxTheClipboard->Close();
+    }
 }

@@ -2,6 +2,8 @@
 #include "LogEntry.h"
 #include "FilterConfig.h"
 #include <wx/listctrl.h>
+#include <wx/clipbrd.h>
+#include <wx/menu.h>
 #include <wx/textctrl.h>
 #include <vector>
 #include <deque>
@@ -55,6 +57,20 @@ protected:
 private:
     void OnItemSelected(wxListEvent& evt);
     void OnItemDeselected(wxListEvent& evt);
+    void OnContextMenu(wxContextMenuEvent& evt);
+    void OnCopyRows(wxCommandEvent& evt);
+    void OnCopyCell(wxCommandEvent& evt);
+
+    // Build tab-separated text from selected (or all visible) rows
+    wxString SelectedRowsAsText(bool rawOnly = false) const;
+
+    enum {
+        ID_CTX_COPY_ROWS = wxID_HIGHEST + 500,
+        ID_CTX_COPY_RAW,
+        ID_CTX_COPY_CELL,
+        ID_CTX_SELECT_ALL,
+    };
+    long m_contextItem{-1};  // row right-clicked
     void ShowPayload(long item);
     bool MatchesFilters(const LogEntry& e) const;
     RowColour ComputeRowColour(const LogEntry& e) const;

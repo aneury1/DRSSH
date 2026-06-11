@@ -1,15 +1,15 @@
 {
    "sessions" : [
       {
-         "autoConnect" : false,
+         "autoConnect" : true,
          "dbPath" : "20260609_084041_192_168_1_136.db",
          "filter" : "",
          "host" : "192.168.1.136",
          "journalArgs" : "",
          "negFilter" : "",
-         "password" : "",
+         "password" : "VABZlgNwc1wH+5Lp3uANdA==",
          "port" : 22,
-         "profileName" : "192.168.1.136",
+         "profileName" : "192.168.1.136 [on]",
          "useSqlite" : true,
          "user" : "neonland"
       },

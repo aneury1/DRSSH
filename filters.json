@@ -1,15 +1,3 @@
 {
-   "rules" : [
-      {
-         "application" : "",
-         "bgColour" : "#FFE01B24",
-         "enabled" : true,
-         "fgColour" : "#FFF6F5F4",
-         "fixedPayload" : "",
-         "name" : "New Rule",
-         "payloadRegex" : "neonland",
-         "tsFrom" : "",
-         "tsTo" : ""
-      }
-   ]
+   "rules" : []
 }
