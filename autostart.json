@@ -1,15 +1,15 @@
 {
    "sessions" : [
       {
-         "autoConnect" : true,
+         "autoConnect" : false,
          "dbPath" : "20260609_084041_192_168_1_136.db",
          "filter" : "",
          "host" : "192.168.1.136",
          "journalArgs" : "",
          "negFilter" : "",
-         "password" : "VABZlgNwc1wH+5Lp3uANdA==",
+         "password" : "",
          "port" : 22,
-         "profileName" : "192.168.1.136 [on]",
+         "profileName" : "192.168.1.136",
          "useSqlite" : true,
          "user" : "neonland"
       },
@@ -62,6 +62,19 @@
          "password" : "",
          "port" : 22,
          "profileName" : "/home/neonland/Desktop/rrrhhh7/sshjournal/20260609_084041_192_168_1_136.db",
+         "useSqlite" : false,
+         "user" : ""
+      },
+      {
+         "autoConnect" : false,
+         "dbPath" : "",
+         "filter" : "",
+         "host" : "/home/neonland/Desktop/sshjournal/20260611_222047_192_168_1_136_export.txt",
+         "journalArgs" : "",
+         "negFilter" : "",
+         "password" : "",
+         "port" : 22,
+         "profileName" : "/home/neonland/Desktop/sshjournal/20260611_222047_192_168_1_136_export.txt",
          "useSqlite" : false,
          "user" : ""
       }

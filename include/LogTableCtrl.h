@@ -39,6 +39,13 @@ public:
     const std::vector<LogEntry>& AllEntries()     const { return m_all; }
     const std::vector<LogEntry>& VisibleEntries() const { return m_visible; }
 
+    // Returns entries for all currently selected rows (multi-select).
+    // Falls back to all visible if nothing selected.
+    std::vector<LogEntry> GetSelectedEntries() const;
+
+    // Number of selected rows
+    int GetSelectedCount() const;
+
     std::function<void(const LogEntry&)> onRowSelected;
 
 protected:
@@ -47,6 +54,7 @@ protected:
 
 private:
     void OnItemSelected(wxListEvent& evt);
+    void OnItemDeselected(wxListEvent& evt);
     void ShowPayload(long item);
     bool MatchesFilters(const LogEntry& e) const;
     RowColour ComputeRowColour(const LogEntry& e) const;

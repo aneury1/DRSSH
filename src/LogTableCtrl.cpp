@@ -3,7 +3,8 @@
 #include <cstdint>
 
 wxBEGIN_EVENT_TABLE(LogTableCtrl, wxListCtrl)
-    EVT_LIST_ITEM_SELECTED(wxID_ANY, LogTableCtrl::OnItemSelected)
+    EVT_LIST_ITEM_SELECTED(wxID_ANY,   LogTableCtrl::OnItemSelected)
+    EVT_LIST_ITEM_DESELECTED(wxID_ANY, LogTableCtrl::OnItemDeselected)
 wxEND_EVENT_TABLE()
 
 static wxColour fromARGB(uint32_t c)
@@ -13,7 +14,7 @@ static wxColour fromARGB(uint32_t c)
 
 LogTableCtrl::LogTableCtrl(wxWindow* parent, wxWindowID id)
     : wxListCtrl(parent, id, wxDefaultPosition, wxDefaultSize,
-                 wxLC_REPORT|wxLC_VIRTUAL|wxLC_SINGLE_SEL|wxLC_HRULES|wxLC_VRULES)
+                 wxLC_REPORT|wxLC_VIRTUAL|wxLC_HRULES|wxLC_VRULES)
 {
     wxListItem col;
     col.SetId(0); col.SetText("Timestamp"); col.SetWidth(200); InsertColumn(0,col);
@@ -212,15 +213,37 @@ wxListItemAttr* LogTableCtrl::OnGetItemAttr(long item) const
 }
 
 // ── selection ────────────────────────────────────────────────────────────────
+std::vector<LogEntry> LogTableCtrl::GetSelectedEntries() const
+{
+    std::vector<LogEntry> result;
+    long item = GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+    while (item != wxNOT_FOUND)
+    {
+        if ((std::size_t)item < m_visible.size())
+            result.push_back(m_visible[(std::size_t)item]);
+        item = GetNextItem(item, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+    }
+    return result;
+}
+
+int LogTableCtrl::GetSelectedCount() const
+{
+    return GetSelectedItemCount();
+}
+
+void LogTableCtrl::OnItemDeselected(wxListEvent&)
+{
+    // Update status — payload keeps last selected row content
+}
+
 void LogTableCtrl::OnItemSelected(wxListEvent& evt)
 {
-    ShowPayload(evt.GetIndex());
-    if (onRowSelected)
-    {
-        long idx = evt.GetIndex();
-        if (idx >= 0 && (std::size_t)idx < m_visible.size())
-            onRowSelected(m_visible[(std::size_t)idx]);
-    }
+    long idx = evt.GetIndex();
+    // Always show the payload for the focused (last-clicked) row
+    ShowPayload(idx);
+
+    if (onRowSelected && idx >= 0 && (std::size_t)idx < m_visible.size())
+        onRowSelected(m_visible[(std::size_t)idx]);
 }
 
 void LogTableCtrl::ShowPayload(long item)

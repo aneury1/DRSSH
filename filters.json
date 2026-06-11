@@ -4,21 +4,10 @@
          "application" : "",
          "bgColour" : "#FFE01B24",
          "enabled" : true,
-         "fgColour" : "#FFFFFFFF",
+         "fgColour" : "#FFF6F5F4",
          "fixedPayload" : "",
-         "name" : "SystemD",
-         "payloadRegex" : "system.*",
-         "tsFrom" : "",
-         "tsTo" : ""
-      },
-      {
-         "application" : "",
-         "bgColour" : "#FF33D17A",
-         "enabled" : true,
-         "fgColour" : "#FF000000",
-         "fixedPayload" : "",
-         "name" : "pam_unix",
-         "payloadRegex" : "pam.*unix",
+         "name" : "New Rule",
+         "payloadRegex" : "neonland",
          "tsFrom" : "",
          "tsTo" : ""
       }

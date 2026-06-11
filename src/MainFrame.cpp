@@ -49,12 +49,13 @@ MainFrame::MainFrame()
     SetStatusText("Ready");
 
     // Keyboard accelerators for font zoom
-    wxAcceleratorEntry accel[4];
+    wxAcceleratorEntry accel[5];
     accel[0].Set(wxACCEL_CTRL, (int)'=', ID_MENU_FONT_INC);
     accel[1].Set(wxACCEL_CTRL, (int)'+', ID_MENU_FONT_INC);
     accel[2].Set(wxACCEL_CTRL, (int)'-', ID_MENU_FONT_DEC);
     accel[3].Set(wxACCEL_CTRL, WXK_NUMPAD_ADD, ID_MENU_FONT_INC);
-    SetAcceleratorTable(wxAcceleratorTable(4, accel));
+    accel[4].Set(wxACCEL_CTRL, (int)'e', ID_MENU_EXPORT_VISIBLE);
+    SetAcceleratorTable(wxAcceleratorTable(5, accel));
 
     LoadSettings();
     LoadAutoStart();
@@ -78,6 +79,9 @@ void MainFrame::BuildMenu()
     file->Append(ID_MENU_SAVE,      "&Save Logs (text)...\tCtrl+S");
     file->Append(ID_MENU_SAVE_DB,   "Save / Export &SQLite...");
     file->Append(ID_MENU_OPEN_DB,   "&Open SQLite DB...\tCtrl+O");
+    file->Append(ID_MENU_OPEN_TXT,  "Open &Text Log...\tCtrl+Shift+O");
+    file->AppendSeparator();
+    file->Append(ID_MENU_EXPORT_VISIBLE, "&Export Visible Rows...\tCtrl+E");
     file->AppendSeparator();
     file->Append(wxID_EXIT, "E&xit\tAlt+F4");
     m_menuBar->Append(file, "&File");
@@ -123,6 +127,8 @@ void MainFrame::BuildMenu()
     Bind(wxEVT_MENU, &MainFrame::OnMenuSaveDb,           this, ID_MENU_SAVE_DB);
     Bind(wxEVT_MENU, &MainFrame::OnMenuOpenDb,           this, ID_MENU_OPEN_DB);
     Bind(wxEVT_MENU, [this](wxCommandEvent&){ Close(); },       wxID_EXIT);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuOpenTxt,        this, ID_MENU_OPEN_TXT);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuExportVisible,  this, ID_MENU_EXPORT_VISIBLE);
     Bind(wxEVT_MENU, &MainFrame::OnMenuConnect,          this, ID_MENU_CONNECT);
     Bind(wxEVT_MENU, &MainFrame::OnMenuDisconnect,       this, ID_MENU_DISCONNECT);
     Bind(wxEVT_MENU, &MainFrame::OnMenuManageProfiles,   this, ID_MENU_MANAGE_PROFILES);
@@ -329,6 +335,18 @@ ConnectionTab& MainFrame::AddConnectionTab(const wxString& title, bool select)
     tab->payloadCtrl->SetFont(wxFontInfo(9).Family(wxFONTFAMILY_TELETYPE));
     tab->logTable->SetPayloadCtrl(tab->payloadCtrl);
     tab->logTable->SetFilterConfig(&m_filterConfig);
+
+    // Update status bar with selection count on each row selection
+    tab->logTable->onRowSelected = [this](const LogEntry&) {
+        auto* t = CurrentTab();
+        if (!t || !t->logTable) return;
+        int n = t->logTable->GetSelectedCount();
+        if (n > 1)
+            SetStatusText(wxString::Format(
+                "%d rows selected  (Ctrl+E to export selection)", n), 0);
+        else
+            SetStatusText("", 0);
+    };
 
     vSplit->SplitHorizontally(tab->logTable, tab->payloadCtrl, -180);
     vSplit->SetMinimumPaneSize(80);  // prevents GTK scrollbar negative-size crash
@@ -956,6 +974,184 @@ void MainFrame::OnMenuFontDecrease(wxCommandEvent&)
     int size = tab->fontSize ? tab->fontSize->GetValue() : 9;
     ApplyLogFont(*tab, size - 1,
                  tab->fontFace ? tab->fontFace->GetValue() : "");
+}
+
+
+void MainFrame::OpenTextFileInTab(const wxString& path)
+{
+    std::ifstream fin(path.ToStdString());
+    if (!fin)
+    {
+        wxMessageBox("Cannot open file:\n" + path, "Open Text", wxOK|wxICON_ERROR, this);
+        return;
+    }
+
+    auto& tab = AddConnectionTab(wxFileName(path).GetFullName(), true);
+    tab.host->SetValue(path);
+    tab.host->SetEditable(false);
+    tab.port->Disable();
+    tab.user->Disable();
+    tab.password->Disable();
+    tab.useSqlite->Disable();
+    tab.dbPath->Disable();
+
+    std::string line;
+    std::size_t count = 0;
+    while (std::getline(fin, line))
+    {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty())
+        {
+            tab.logTable->AppendLine(line);
+            ++count;
+        }
+    }
+
+    tab.logTable->SetFilterConfig(&m_filterConfig);
+    ApplyTheme();
+    SetStatusText(wxString::Format("Loaded %zu lines from %s", count, path));
+}
+
+void MainFrame::ExportVisibleRows(ConnectionTab& tab)
+{
+    // Prefer selected rows; fall back to all visible rows
+    std::vector<LogEntry> selectedRows = tab.logTable->GetSelectedEntries();
+    const bool usingSelection = !selectedRows.empty();
+    const std::vector<LogEntry>& rows = usingSelection
+                                        ? selectedRows
+                                        : tab.logTable->VisibleEntries();
+    if (rows.empty())
+    {
+        SetStatusText("No rows to export");
+        return;
+    }
+
+    // ── Column selection dialog ───────────────────────────────────────────
+    // The 5 columns: Timestamp, Hostname, Service, PID, Message  + Raw
+    const wxString colNames[] = {
+        "Timestamp", "Hostname", "Service", "PID", "Message", "Raw (full line)"
+    };
+    const int COL_COUNT = 6;
+
+    wxArrayString choices;
+    for (int i = 0; i < COL_COUNT; ++i) choices.Add(colNames[i]);
+
+    wxArrayInt defaults;
+    for (int i = 0; i < COL_COUNT; ++i) defaults.Add(i);   // all pre-selected
+
+    wxMultiChoiceDialog colDlg(this,
+        wxString::Format("Select columns to export\n(%zu %s will be written):",
+                          rows.size(),
+                          usingSelection ? "selected rows" : "visible rows"),
+        "Export Rows", choices);
+    colDlg.SetSelections(defaults);
+
+    if (colDlg.ShowModal() != wxID_OK) return;
+
+    wxArrayInt sel = colDlg.GetSelections();
+    if (sel.IsEmpty())
+    {
+        wxMessageBox("No columns selected.", "Export", wxOK|wxICON_INFORMATION, this);
+        return;
+    }
+
+    // ── File destination ─────────────────────────────────────────────────
+    wxDateTime now = wxDateTime::Now();
+    wxString host  = tab.host->GetValue(); host.Replace(".", "_");
+    wxString def   = now.Format("%Y%m%d_%H%M%S_") + host + "_export.txt";
+
+    wxFileDialog fileDlg(this, "Export Visible Rows", "", def,
+                         "Tab-separated (*.txt)|*.txt|CSV (*.csv)|*.csv|All (*)|*",
+                         wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (fileDlg.ShowModal() != wxID_OK) return;
+
+    wxString outPath = fileDlg.GetPath();
+    bool isCSV = outPath.Lower().EndsWith(".csv");
+    std::string sep = isCSV ? "," : "\t";
+
+    std::ofstream out(outPath.ToStdString());
+    if (!out)
+    {
+        wxMessageBox("Cannot write to:\n" + outPath, "Export", wxOK|wxICON_ERROR, this);
+        return;
+    }
+
+    // Header row
+    bool first = true;
+    for (int idx : sel)
+    {
+        if (!first) out << sep;
+        if (isCSV) out << '"';
+        out << colNames[idx].ToStdString();
+        if (isCSV) out << '"';
+        first = false;
+    }
+    out << '\n';
+
+    // Data rows
+    auto cellVal = [](const LogEntry& e, int col) -> std::string {
+        switch (col) {
+            case 0: return e.timestamp;
+            case 1: return e.hostname;
+            case 2: return e.service;
+            case 3: return e.pid;
+            case 4: return e.message;
+            case 5: return e.raw;
+            default: return "";
+        }
+    };
+
+    for (const auto& e : rows)
+    {
+        first = true;
+        for (int idx : sel)
+        {
+            if (!first) out << sep;
+            std::string val = cellVal(e, idx);
+            if (isCSV)
+            {
+                // Escape quotes and wrap in quotes
+                std::string escaped;
+                for (char c : val)
+                {
+                    if (c == '"') escaped += '"';
+                    escaped += c;
+                }
+                out << '"' << escaped << '"';
+            }
+            else
+            {
+                // Replace tabs in value so TSV stays valid
+                for (char c : val) out << (c == '\t' ? ' ' : c);
+            }
+            first = false;
+        }
+        out << '\n';
+    }
+
+    SetStatusText(wxString::Format("Exported %zu %s, %zu columns to %s",
+                                   rows.size(),
+                                   usingSelection ? "selected rows" : "visible rows",
+                                   (std::size_t)sel.GetCount(), outPath));
+}
+
+void MainFrame::OnMenuOpenTxt(wxCommandEvent&)
+{
+    wxFileDialog dlg(this, "Open Text Log", "", "",
+                     "Text files (*.txt;*.log)|*.txt;*.log|All files (*)|*",
+                     wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
+    if (dlg.ShowModal() != wxID_OK) return;
+
+    wxArrayString paths;
+    dlg.GetPaths(paths);
+    for (const auto& p : paths)
+        OpenTextFileInTab(p);
+}
+
+void MainFrame::OnMenuExportVisible(wxCommandEvent&)
+{
+    auto* tab = CurrentTab();
+    if (tab) ExportVisibleRows(*tab);
 }
 
 bool JournalApp::OnInit()

@@ -51,6 +51,8 @@ private:
     void DoDisconnect(ConnectionTab& tab);
     void SaveLogsToFile(ConnectionTab& tab);
     void OpenDatabaseInTab(const wxString& path);
+    void OpenTextFileInTab(const wxString& path);
+    void ExportVisibleRows(ConnectionTab& tab);
 
     // AutoStart
     void LoadAutoStart();
@@ -61,6 +63,8 @@ private:
     void OnMenuNewTab(wxCommandEvent&);
     void OnMenuCloseTab(wxCommandEvent&);
     void OnMenuSave(wxCommandEvent&);
+    void OnMenuOpenTxt(wxCommandEvent&);
+    void OnMenuExportVisible(wxCommandEvent&);
     void OnMenuSaveDb(wxCommandEvent&);
     void OnMenuOpenDb(wxCommandEvent&);
     void OnMenuConnect(wxCommandEvent&);
@@ -118,6 +122,8 @@ private:
         ID_MENU_SAVE_FILTER_JSON,
         ID_MENU_FONT_INC,
         ID_MENU_FONT_DEC,
+        ID_MENU_OPEN_TXT,
+        ID_MENU_EXPORT_VISIBLE,
     };
 
     wxDECLARE_EVENT_TABLE();
