@@ -47,6 +47,15 @@ MainFrame::MainFrame()
     Bind(EVT_SSH_STATUS, &MainFrame::OnSSHStatus,  this);
     CreateStatusBar(2);
     SetStatusText("Ready");
+
+    // Keyboard accelerators for font zoom
+    wxAcceleratorEntry accel[4];
+    accel[0].Set(wxACCEL_CTRL, (int)'=', ID_MENU_FONT_INC);
+    accel[1].Set(wxACCEL_CTRL, (int)'+', ID_MENU_FONT_INC);
+    accel[2].Set(wxACCEL_CTRL, (int)'-', ID_MENU_FONT_DEC);
+    accel[3].Set(wxACCEL_CTRL, WXK_NUMPAD_ADD, ID_MENU_FONT_INC);
+    SetAcceleratorTable(wxAcceleratorTable(4, accel));
+
     LoadSettings();
     LoadAutoStart();
 }
@@ -101,6 +110,9 @@ void MainFrame::BuildMenu()
 
     auto* view = new wxMenu;
     view->AppendCheckItem(ID_MENU_DARK_THEME, "&Dark Theme\tCtrl+Shift+D");
+    view->AppendSeparator();
+    view->Append(ID_MENU_FONT_INC, "Font &Larger\tCtrl+=");
+    view->Append(ID_MENU_FONT_DEC, "Font &Smaller\tCtrl+-");
     m_menuBar->Append(view, "&View");
 
     SetMenuBar(m_menuBar);
@@ -120,6 +132,8 @@ void MainFrame::BuildMenu()
     Bind(wxEVT_MENU, &MainFrame::OnMenuUploadFile,       this, ID_MENU_UPLOAD_FILE);
     Bind(wxEVT_MENU, &MainFrame::OnMenuExecuteCommand,   this, ID_MENU_EXECUTE_COMMAND);
     Bind(wxEVT_MENU, &MainFrame::OnMenuDarkTheme,        this, ID_MENU_DARK_THEME);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuFontIncrease,     this, ID_MENU_FONT_INC);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuFontDecrease,     this, ID_MENU_FONT_DEC);
     Bind(wxEVT_MENU, &MainFrame::OnMenuFilterConfig,     this, ID_MENU_FILTER_CONFIG);
     Bind(wxEVT_MENU, &MainFrame::OnMenuLoadFilterJson,   this, ID_MENU_LOAD_FILTER_JSON);
     Bind(wxEVT_MENU, &MainFrame::OnMenuSaveFilterJson,   this, ID_MENU_SAVE_FILTER_JSON);
@@ -219,7 +233,34 @@ wxPanel* MainFrame::BuildSidebar(wxWindow* parent, ConnectionTab& tab)
 
     root->Add(filtBox, 0, wxEXPAND|wxALL, 4);
 
+    // ── Font box ────────────────────────────────────────
+    auto* fontBox = new wxStaticBoxSizer(wxVERTICAL, scroll, "Log Font");
+    auto* fontGrid = new wxFlexGridSizer(2, 4, 6);
+    fontGrid->AddGrowableCol(1);
+
+    fontGrid->Add(new wxStaticText(scroll,wxID_ANY,"Size:"), 0, wxALIGN_CENTER_VERTICAL);
+    tab.fontSize = new wxSpinCtrl(scroll,wxID_ANY,"9",wxDefaultPosition,
+                                   wxDefaultSize,wxSP_ARROW_KEYS,6,32,9);
+    fontGrid->Add(tab.fontSize, 1, wxEXPAND);
+
+    fontGrid->Add(new wxStaticText(scroll,wxID_ANY,"Face:"), 0, wxALIGN_CENTER_VERTICAL);
+    tab.fontFace = new wxTextCtrl(scroll,wxID_ANY,"");
+    tab.fontFace->SetHint("monospace");
+    fontGrid->Add(tab.fontFace, 1, wxEXPAND);
+
+    fontBox->Add(fontGrid, 0, wxEXPAND|wxALL, 6);
+
+    auto* btnApplyFont = new wxButton(scroll,wxID_ANY,"Apply Font",
+                                       wxDefaultPosition,wxSize(-1,28));
+    fontBox->Add(btnApplyFont, 0, wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM, 6);
+
+    root->Add(fontBox, 0, wxEXPAND|wxALL, 4);
+
+    // Push everything to the top — spacer eats remaining vertical space
+    root->AddStretchSpacer(1);
+
     scroll->SetSizer(root);
+    // Use FitInside so the virtual size matches content, keeping it top-aligned
     root->FitInside(scroll);
 
     // ── Button bindings ─────────────────────────────────
@@ -236,7 +277,6 @@ wxPanel* MainFrame::BuildSidebar(wxWindow* parent, ConnectionTab& tab)
     btnClear->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e){ OnMenuClearFilter(e); });
 
     btnSaveFilt->Bind(wxEVT_BUTTON, [this](wxCommandEvent&){
-        // Always look up the current tab by index — never hold raw tab pointer.
         auto* t = CurrentTab();
         if (!t) return;
 
@@ -255,6 +295,11 @@ wxPanel* MainFrame::BuildSidebar(wxWindow* parent, ConnectionTab& tab)
         SetStatusText(wxString::Format("Saved %zu lines", vis.size()));
     });
 
+    btnApplyFont->Bind(wxEVT_BUTTON, [this](wxCommandEvent&){
+        ApplyLogFontFromCurrentTab();
+    });
+
+    // Ctrl+= / Ctrl++ / Ctrl+- handled at frame level (see BuildMenu/ctor)
     return scroll;
 }
 
@@ -856,6 +901,61 @@ void MainFrame::OnClose(wxCloseEvent& evt)
     SaveAutoStart();
     m_filterConfig.SaveToFile("filters.json");
     evt.Skip();
+}
+
+void MainFrame::ApplyLogFont(ConnectionTab& tab, int size, const wxString& face)
+{
+    if (size < 6)  size = 6;
+    if (size > 48) size = 48;
+
+    wxString resolvedFace = face; resolvedFace.Trim(true); resolvedFace.Trim(false);
+    if (resolvedFace.IsEmpty()) resolvedFace = "monospace";
+
+    wxFont f(size, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL,
+             false, resolvedFace);
+    if (!f.IsOk())
+        f = wxFont(size, wxFONTFAMILY_TELETYPE,
+                   wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+
+    if (tab.logTable)    tab.logTable->SetFont(f);
+    if (tab.payloadCtrl) tab.payloadCtrl->SetFont(f);
+
+    if (tab.fontSize && tab.fontSize->GetValue() != size)
+        tab.fontSize->SetValue(size);
+    if (tab.fontFace)
+    {
+        wxString cur = tab.fontFace->GetValue(); cur.Trim(true); cur.Trim(false);
+        if (cur != resolvedFace) tab.fontFace->SetValue(resolvedFace);
+    }
+
+    if (tab.logTable) tab.logTable->Refresh();
+}
+
+void MainFrame::ApplyLogFontFromCurrentTab()
+{
+    auto* tab = CurrentTab();
+    if (!tab) return;
+    int      size = tab->fontSize ? tab->fontSize->GetValue() : 9;
+    wxString face = tab->fontFace ? tab->fontFace->GetValue() : "";
+    ApplyLogFont(*tab, size, face);
+}
+
+void MainFrame::OnMenuFontIncrease(wxCommandEvent&)
+{
+    auto* tab = CurrentTab();
+    if (!tab) return;
+    int size = tab->fontSize ? tab->fontSize->GetValue() : 9;
+    ApplyLogFont(*tab, size + 1,
+                 tab->fontFace ? tab->fontFace->GetValue() : "");
+}
+
+void MainFrame::OnMenuFontDecrease(wxCommandEvent&)
+{
+    auto* tab = CurrentTab();
+    if (!tab) return;
+    int size = tab->fontSize ? tab->fontSize->GetValue() : 9;
+    ApplyLogFont(*tab, size - 1,
+                 tab->fontFace ? tab->fontFace->GetValue() : "");
 }
 
 bool JournalApp::OnInit()

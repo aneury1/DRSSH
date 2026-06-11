@@ -72,6 +72,10 @@ private:
     void OnMenuUploadFile(wxCommandEvent&);
     void OnMenuExecuteCommand(wxCommandEvent&);
     void OnMenuDarkTheme(wxCommandEvent&);
+    void OnMenuFontIncrease(wxCommandEvent&);
+    void OnMenuFontDecrease(wxCommandEvent&);
+    void ApplyLogFontFromCurrentTab();
+    void ApplyLogFont(ConnectionTab& tab, int size, const wxString& face);
     void OnMenuFilterConfig(wxCommandEvent&);
     void OnMenuLoadFilterJson(wxCommandEvent&);
     void OnMenuSaveFilterJson(wxCommandEvent&);
@@ -112,6 +116,8 @@ private:
         ID_MENU_FILTER_CONFIG,
         ID_MENU_LOAD_FILTER_JSON,
         ID_MENU_SAVE_FILTER_JSON,
+        ID_MENU_FONT_INC,
+        ID_MENU_FONT_DEC,
     };
 
     wxDECLARE_EVENT_TABLE();

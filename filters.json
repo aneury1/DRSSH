@@ -6,8 +6,19 @@
          "enabled" : true,
          "fgColour" : "#FFFFFFFF",
          "fixedPayload" : "",
-         "name" : "New Rule",
-         "payloadRegex" : "systemd",
+         "name" : "SystemD",
+         "payloadRegex" : "system.*",
+         "tsFrom" : "",
+         "tsTo" : ""
+      },
+      {
+         "application" : "",
+         "bgColour" : "#FF33D17A",
+         "enabled" : true,
+         "fgColour" : "#FF000000",
+         "fixedPayload" : "",
+         "name" : "pam_unix",
+         "payloadRegex" : "pam.*unix",
          "tsFrom" : "",
          "tsTo" : ""
       }

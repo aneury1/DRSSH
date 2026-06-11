@@ -29,6 +29,8 @@ struct ConnectionTab
     wxTextCtrl*    dbPath{};
     LogTableCtrl*  logTable{};
     wxTextCtrl*    payloadCtrl{};
+    wxSpinCtrl*    fontSize{};     // log font size control
+    wxTextCtrl*    fontFace{};     // log font face control
 
     // Runtime
     std::unique_ptr<SSHJournalReader> reader;

@@ -1,0 +1,69 @@
+{
+   "sessions" : [
+      {
+         "autoConnect" : true,
+         "dbPath" : "20260609_084041_192_168_1_136.db",
+         "filter" : "",
+         "host" : "192.168.1.136",
+         "journalArgs" : "",
+         "negFilter" : "",
+         "password" : "VABZlgNwc1wH+5Lp3uANdA==",
+         "port" : 22,
+         "profileName" : "192.168.1.136 [on]",
+         "useSqlite" : true,
+         "user" : "neonland"
+      },
+      {
+         "autoConnect" : false,
+         "dbPath" : "20260607_082516_192_168_1_136.db",
+         "filter" : "",
+         "host" : "192.168.1.136",
+         "journalArgs" : "",
+         "negFilter" : "",
+         "password" : "",
+         "port" : 22,
+         "profileName" : "192.168.1.136",
+         "useSqlite" : true,
+         "user" : "neonland"
+      },
+      {
+         "autoConnect" : false,
+         "dbPath" : "",
+         "filter" : "",
+         "host" : "",
+         "journalArgs" : "",
+         "negFilter" : "",
+         "password" : "",
+         "port" : 22,
+         "profileName" : "Tab 3",
+         "useSqlite" : false,
+         "user" : ""
+      },
+      {
+         "autoConnect" : false,
+         "dbPath" : "",
+         "filter" : "",
+         "host" : "/home/neonland/Desktop/rrhh4/sshjournal/20260607_082516_192_168_1_136.db",
+         "journalArgs" : "",
+         "negFilter" : "",
+         "password" : "",
+         "port" : 22,
+         "profileName" : "/home/neonland/Desktop/rrhh4/sshjournal/20260607_082516_192_168_1_136.db",
+         "useSqlite" : false,
+         "user" : ""
+      },
+      {
+         "autoConnect" : false,
+         "dbPath" : "",
+         "filter" : "",
+         "host" : "/home/neonland/Desktop/rrrhhh7/sshjournal/20260609_084041_192_168_1_136.db",
+         "journalArgs" : "",
+         "negFilter" : "",
+         "password" : "",
+         "port" : 22,
+         "profileName" : "/home/neonland/Desktop/rrrhhh7/sshjournal/20260609_084041_192_168_1_136.db",
+         "useSqlite" : false,
+         "user" : ""
+      }
+   ]
+}
