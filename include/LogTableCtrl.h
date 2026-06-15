@@ -23,6 +23,7 @@ class LogTableCtrl : public wxListCtrl
 {
 public:
     LogTableCtrl(wxWindow* parent, wxWindowID id = wxID_ANY);
+    ~LogTableCtrl();
 
     void AppendLine(const std::string& line);
     void SetEntries(const std::vector<LogEntry>& entries);

@@ -65,6 +65,14 @@ private:
     void OnMenuSave(wxCommandEvent&);
     void OnMenuOpenTxt(wxCommandEvent&);
     void OnMenuExportVisible(wxCommandEvent&);
+    void OnMenuExportJsonVisible(wxCommandEvent&);
+    void OnMenuExportJsonAll(wxCommandEvent&);
+    void OnMenuImportJson(wxCommandEvent&);
+
+    // JSON helpers
+    bool ExportLogsToJson(const std::vector<LogEntry>& entries,
+                          const wxString& path) const;
+    bool ImportLogsFromJson(const wxString& path, ConnectionTab& tab);
     void OnMenuSaveDb(wxCommandEvent&);
     void OnMenuOpenDb(wxCommandEvent&);
     void OnMenuConnect(wxCommandEvent&);
@@ -124,6 +132,10 @@ private:
         ID_MENU_FONT_DEC,
         ID_MENU_OPEN_TXT,
         ID_MENU_EXPORT_VISIBLE,
+        // JSON export/import
+        ID_MENU_EXPORT_JSON_VISIBLE,
+        ID_MENU_EXPORT_JSON_ALL,
+        ID_MENU_IMPORT_JSON,
     };
 
     wxDECLARE_EVENT_TABLE();

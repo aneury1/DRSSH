@@ -17,6 +17,24 @@ static wxColour fromARGB(uint32_t c)
     return wxColour((c>>16)&0xFF,(c>>8)&0xFF,c&0xFF,(c>>24)&0xFF);
 }
 
+LogTableCtrl::~LogTableCtrl()
+{
+    // wxLC_VIRTUAL calls OnGetItemText/OnGetItemAttr during base-class
+    // destruction (EVT_LIST_DELETE_ALL_ITEMS, internal repaint, etc.).
+    // Set item count to 0 first so the base class never calls our overrides
+    // with a non-zero item count, then clear our data so any stray call
+    // gets an empty range and returns immediately.
+    SetItemCount(0);
+    m_all.clear();
+    m_visible.clear();
+    m_attrCache.clear();
+    m_posRegex.reset();
+    m_negRegex.reset();
+    onRowSelected = nullptr;
+    m_payloadCtrl = nullptr;   // not owned by us; just stop using it
+    m_filterCfg   = nullptr;
+}
+
 LogTableCtrl::LogTableCtrl(wxWindow* parent, wxWindowID id)
     : wxListCtrl(parent, id, wxDefaultPosition, wxDefaultSize,
                  wxLC_REPORT|wxLC_VIRTUAL|wxLC_HRULES|wxLC_VRULES)

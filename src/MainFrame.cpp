@@ -18,6 +18,7 @@
 #include <wx/scrolwin.h>
 
 #include "MainFrame.h"
+#include <json/json.h>
 #include "Events.h"
 #include "LogEntry.h"
 #include "Database.h"
@@ -49,13 +50,15 @@ MainFrame::MainFrame()
     SetStatusText("Ready");
 
     // Keyboard accelerators for font zoom
-    wxAcceleratorEntry accel[5];
+    wxAcceleratorEntry accel[7];
     accel[0].Set(wxACCEL_CTRL, (int)'=', ID_MENU_FONT_INC);
     accel[1].Set(wxACCEL_CTRL, (int)'+', ID_MENU_FONT_INC);
     accel[2].Set(wxACCEL_CTRL, (int)'-', ID_MENU_FONT_DEC);
     accel[3].Set(wxACCEL_CTRL, WXK_NUMPAD_ADD, ID_MENU_FONT_INC);
     accel[4].Set(wxACCEL_CTRL, (int)'e', ID_MENU_EXPORT_VISIBLE);
-    SetAcceleratorTable(wxAcceleratorTable(5, accel));
+    accel[5].Set(wxACCEL_CTRL|wxACCEL_SHIFT, (int)'j', ID_MENU_EXPORT_JSON_VISIBLE);
+    accel[6].Set(wxACCEL_CTRL|wxACCEL_SHIFT, (int)'i', ID_MENU_IMPORT_JSON);
+    SetAcceleratorTable(wxAcceleratorTable(7, accel));
 
     LoadSettings();
     LoadAutoStart();
@@ -81,7 +84,15 @@ void MainFrame::BuildMenu()
     file->Append(ID_MENU_OPEN_DB,   "&Open SQLite DB...\tCtrl+O");
     file->Append(ID_MENU_OPEN_TXT,  "Open &Text Log...\tCtrl+Shift+O");
     file->AppendSeparator();
-    file->Append(ID_MENU_EXPORT_VISIBLE, "&Export Visible Rows...\tCtrl+E");
+    file->Append(ID_MENU_EXPORT_VISIBLE, "&Export Visible Rows (TSV/CSV)...\tCtrl+E");
+    // JSON submenu
+    auto* jsonMenu = new wxMenu;
+    jsonMenu->Append(ID_MENU_EXPORT_JSON_VISIBLE, "Export &Visible Rows as JSON...\tCtrl+Shift+J");
+    jsonMenu->Append(ID_MENU_EXPORT_JSON_ALL,     "Export &All Rows as JSON...");
+    jsonMenu->AppendSeparator();
+    jsonMenu->Append(ID_MENU_IMPORT_JSON,         "&Import JSON Log...\tCtrl+Shift+I");
+    file->AppendSeparator();
+    file->AppendSubMenu(jsonMenu, "&JSON");
     file->AppendSeparator();
     file->Append(wxID_EXIT, "E&xit\tAlt+F4");
     m_menuBar->Append(file, "&File");
@@ -127,8 +138,12 @@ void MainFrame::BuildMenu()
     Bind(wxEVT_MENU, &MainFrame::OnMenuSaveDb,           this, ID_MENU_SAVE_DB);
     Bind(wxEVT_MENU, &MainFrame::OnMenuOpenDb,           this, ID_MENU_OPEN_DB);
     Bind(wxEVT_MENU, [this](wxCommandEvent&){ Close(); },       wxID_EXIT);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuOpenTxt,        this, ID_MENU_OPEN_TXT);
-    Bind(wxEVT_MENU, &MainFrame::OnMenuExportVisible,  this, ID_MENU_EXPORT_VISIBLE);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuOpenTxt,            this, ID_MENU_OPEN_TXT);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuExportVisible,      this, ID_MENU_EXPORT_VISIBLE);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuExportJsonVisible,  this, ID_MENU_EXPORT_JSON_VISIBLE);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuExportJsonAll,      this, ID_MENU_EXPORT_JSON_ALL);
+    Bind(wxEVT_MENU, &MainFrame::OnMenuImportJson,         this, ID_MENU_IMPORT_JSON);
+
     Bind(wxEVT_MENU, &MainFrame::OnMenuConnect,          this, ID_MENU_CONNECT);
     Bind(wxEVT_MENU, &MainFrame::OnMenuDisconnect,       this, ID_MENU_DISCONNECT);
     Bind(wxEVT_MENU, &MainFrame::OnMenuManageProfiles,   this, ID_MENU_MANAGE_PROFILES);
@@ -381,24 +396,36 @@ void MainFrame::CloseConnectionTab(std::size_t index)
     if (m_tabs.size()==1){SetStatusText("Cannot close the last tab");return;}
     auto* t=TabAt(index); if(!t) return;
 
-    // 1. Stop background thread FIRST so no EVT_SSH_LOG arrives for this index.
-    if (t->reader){t->reader->SetCallback(nullptr);t->reader->Stop();}
-    if (t->db) t->db->Close();
+    // Step 1: Stop background thread and release callback lambda FIRST.
+    // This prevents any EVT_SSH_LOG from being queued after this point.
+    if (t->reader) { t->reader->SetCallback(nullptr); t->reader->Stop(); }
+    if (t->db)     { t->db->Close(); }
 
-    // 2. Remove from our vector BEFORE telling the notebook to destroy the page.
-    //    This ensures AppendLog() cannot touch a dead index even if a queued
-    //    event slips through between step 1 and the DeletePage call.
-    m_tabs.erase(m_tabs.begin()+(std::ptrdiff_t)index);
+    // Step 2: Disconnect the onRowSelected callback so it cannot fire
+    // during widget destruction (wxListCtrl sends selection-change events
+    // internally while tearing down).
+    if (t->logTable) t->logTable->onRowSelected = nullptr;
 
-    // 3. Now it is safe to destroy the wx widgets.
+    // Step 3: DeletePage destroys the wxPanel and the entire widget subtree
+    // including LogTableCtrl. LogTableCtrl::~LogTableCtrl() sets item count
+    // to 0 and clears all data BEFORE the base wxListCtrl destructor runs,
+    // so OnGetItemText/OnGetItemAttr cannot be called with stale data.
+    // We keep the tab in m_tabs during DeletePage so that any synchronous
+    // wx event dispatched during destruction finds a valid (but stopped) entry.
     m_notebook->DeletePage((int)index);
 
-    // 4. Clamp selection.
+    // Step 4: Widget tree is gone. Destroy RAII members (reader already
+    // stopped, db already closed -- dtors are now trivial).
+    m_tabs.erase(m_tabs.begin()+(std::ptrdiff_t)index);
+
+    // Step 5: Restore notebook selection.
     if (!m_tabs.empty())
     {
-        std::size_t next=(index>=m_tabs.size())?m_tabs.size()-1:index;
+        std::size_t next = (index > 0) ? index - 1 : 0;
+        if (next >= m_tabs.size()) next = m_tabs.size() - 1;
         m_notebook->SetSelection((int)next);
     }
+
     SaveSettings();
 }
 
@@ -418,6 +445,8 @@ std::size_t MainFrame::CurrentTabIndex() const
 void MainFrame::AppendLog(std::size_t tabIndex, const std::string& line)
 {
     auto* tab=TabAt(tabIndex); if(!tab) return;
+    // logTable may be nullptr if the tab is mid-close
+    if (!tab->logTable) return;
     if (tab->db&&tab->db->IsOpen()&&!tab->sessionId.empty())
         tab->db->InsertLog(tab->sessionId,LogEntry::Parse(line));
     tab->logTable->AppendLine(line);
@@ -896,7 +925,11 @@ void MainFrame::OnMenuSaveFilterJson(wxCommandEvent&)
 // ─────────────────────────────────────────────
 void MainFrame::OnSSHLog(wxThreadEvent& evt)
 {
-    AppendLog((std::size_t)evt.GetInt(),evt.GetString().ToStdString());
+    std::size_t idx = (std::size_t)evt.GetInt();
+    // The tab may already have been closed and erased from m_tabs by the time
+    // this queued event is dispatched. TabAt() returns nullptr safely.
+    if (idx >= m_tabs.size()) return;
+    AppendLog(idx, evt.GetString().ToStdString());
 }
 void MainFrame::OnSSHStatus(wxThreadEvent& evt)
 {
@@ -1152,6 +1185,151 @@ void MainFrame::OnMenuExportVisible(wxCommandEvent&)
 {
     auto* tab = CurrentTab();
     if (tab) ExportVisibleRows(*tab);
+}
+
+
+bool MainFrame::ExportLogsToJson(const std::vector<LogEntry>& entries,
+                                  const wxString& path) const
+{
+    Json::Value arr(Json::arrayValue);
+    for (const auto& e : entries)
+    {
+        Json::Value row;
+        row["timestamp"] = e.timestamp;
+        row["hostname"]  = e.hostname;
+        row["service"]   = e.service;
+        row["pid"]       = e.pid;
+        row["message"]   = e.message;
+        row["raw"]       = e.raw;
+        arr.append(row);
+    }
+
+    Json::Value root;
+    root["version"]    = 1;
+    root["rowCount"]   = (int)entries.size();
+    root["exportedAt"] = wxDateTime::Now().FormatISOCombined().ToStdString();
+    root["logs"]       = arr;
+
+    Json::StyledWriter writer;
+    std::ofstream f(path.ToStdString());
+    if (!f) return false;
+    f << writer.write(root);
+    return f.good();
+}
+
+bool MainFrame::ImportLogsFromJson(const wxString& path, ConnectionTab& tab)
+{
+    std::ifstream f(path.ToStdString());
+    if (!f) return false;
+
+    Json::Value  root;
+    Json::Reader reader;
+    if (!reader.parse(f, root)) return false;
+
+    const Json::Value& arr = root["logs"];
+    if (!arr.isArray()) return false;
+
+    for (const auto& v : arr)
+    {
+        LogEntry e;
+        e.timestamp = v.get("timestamp", "").asString();
+        e.hostname  = v.get("hostname",  "").asString();
+        e.service   = v.get("service",   "").asString();
+        e.pid       = v.get("pid",       "").asString();
+        e.message   = v.get("message",   "").asString();
+        e.raw       = v.get("raw",       "").asString();
+        if (e.raw.empty())
+            e.raw = e.timestamp + " " + e.hostname + " "
+                  + e.service + "[" + e.pid + "]: " + e.message;
+        tab.logTable->AppendLine(e.raw);
+    }
+    return true;
+}
+
+void MainFrame::OnMenuExportJsonVisible(wxCommandEvent&)
+{
+    auto* tab = CurrentTab();
+    if (!tab || !tab->logTable) return;
+
+    std::vector<LogEntry> sel = tab->logTable->GetSelectedEntries();
+    const std::vector<LogEntry>& rows =
+        sel.empty() ? tab->logTable->VisibleEntries() : sel;
+
+    if (rows.empty()) { SetStatusText("No rows to export"); return; }
+
+    wxDateTime now = wxDateTime::Now();
+    wxString host  = tab->host->GetValue(); host.Replace(".", "_");
+    wxString def   = now.Format("%Y%m%d_%H%M%S_") + host + "_visible.json";
+
+    wxFileDialog dlg(this, "Export Visible Rows as JSON", "", def,
+                     "JSON files (*.json)|*.json|All files (*)|*",
+                     wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (dlg.ShowModal() != wxID_OK) return;
+
+    if (ExportLogsToJson(rows, dlg.GetPath()))
+        SetStatusText(wxString::Format("Exported %zu rows to %s",
+                                       rows.size(), dlg.GetPath()));
+    else
+        SetStatusText("JSON export failed");
+}
+
+void MainFrame::OnMenuExportJsonAll(wxCommandEvent&)
+{
+    auto* tab = CurrentTab();
+    if (!tab || !tab->logTable) return;
+
+    const auto& rows = tab->logTable->AllEntries();
+    if (rows.empty()) { SetStatusText("No rows to export"); return; }
+
+    wxDateTime now = wxDateTime::Now();
+    wxString host  = tab->host->GetValue(); host.Replace(".", "_");
+    wxString def   = now.Format("%Y%m%d_%H%M%S_") + host + "_all.json";
+
+    wxFileDialog dlg(this, "Export All Rows as JSON", "", def,
+                     "JSON files (*.json)|*.json|All files (*)|*",
+                     wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (dlg.ShowModal() != wxID_OK) return;
+
+    if (ExportLogsToJson(rows, dlg.GetPath()))
+        SetStatusText(wxString::Format("Exported %zu rows to %s",
+                                       rows.size(), dlg.GetPath()));
+    else
+        SetStatusText("JSON export failed");
+}
+
+void MainFrame::OnMenuImportJson(wxCommandEvent&)
+{
+    wxFileDialog dlg(this, "Import JSON Log", "", "",
+                     "JSON files (*.json)|*.json|All files (*)|*",
+                     wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
+    if (dlg.ShowModal() != wxID_OK) return;
+
+    wxArrayString paths;
+    dlg.GetPaths(paths);
+
+    for (const auto& path : paths)
+    {
+        auto& tab = AddConnectionTab(wxFileName(path).GetFullName(), true);
+        tab.host->SetValue(path);
+        tab.host->SetEditable(false);
+        tab.port->Disable();
+        tab.user->Disable();
+        tab.password->Disable();
+        tab.useSqlite->Disable();
+        tab.dbPath->Disable();
+        tab.logTable->SetFilterConfig(&m_filterConfig);
+
+        if (ImportLogsFromJson(path, tab))
+        {
+            SetStatusText(wxString::Format("Imported %zu rows from %s",
+                tab.logTable->AllEntries().size(), path));
+        }
+        else
+        {
+            SetStatusText("Failed to import: " + path);
+        }
+        ApplyTheme();
+    }
 }
 
 bool JournalApp::OnInit()
