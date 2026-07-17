@@ -214,7 +214,7 @@ wxPanel* MainFrame::BuildSidebar(wxWindow* parent, ConnectionTab& tab)
     connBox->Add(connBtns, 0, wxEXPAND | wxALL, 6);
 
     addFld("jctl args:", tab.journalArgs); tab.journalArgs->SetHint("-f -o short-iso");
-    connBox->Add(grid, 0, wxEXPAND);  // journalArgs already added to grid
+    ///connBox->Add(grid, 0, wxEXPAND);  // journalArgs already added to grid
 
     // SQLite
     auto* sqlRow = new wxBoxSizer(wxHORIZONTAL);
