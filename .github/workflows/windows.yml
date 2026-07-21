@@ -1,0 +1,71 @@
+name: Windows Build & Release
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-wxwidgets3.2-msw
+            mingw-w64-x86_64-libssh
+            mingw-w64-x86_64-sqlite3
+            mingw-w64-x86_64-jsoncpp
+            mingw-w64-x86_64-pkg-config
+            pkg-config
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH=/mingw64
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Stage package
+        run: |
+          mkdir -p package
+          cp build/RemoteJournal.exe package/
+          # Bundle required MinGW/MSYS2 runtime DLLs
+          ldd build/RemoteJournal.exe | grep '/mingw64/bin' | awk '{print $3}' | sort -u | xargs -I{} cp {} package/ || true
+
+      - name: Create zip archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path package\* -DestinationPath RemoteJournal-windows.zip
+
+      - name: Set release tag
+        id: tag
+        shell: pwsh
+        run: |
+          $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+          echo "tag=build-$ts" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: RemoteJournal Windows Build ${{ steps.tag.outputs.tag }}
+          files: RemoteJournal-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.APP_TOKEN }}
