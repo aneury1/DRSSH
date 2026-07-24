@@ -33,6 +33,8 @@ set(SOURCES
     src/MainFrame.cpp
 )
 
+add_subdirectory(backendServer)
+
 add_executable(RemoteJournal ${SOURCES})
 
 target_link_libraries(RemoteJournal
